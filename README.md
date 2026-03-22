@@ -47,7 +47,7 @@ Session 1                          Session 2
 | **Zed** | ✅ | via MCP |
 | **JetBrains (Junie)** | ✅ | via MCP |
 | **Augment** | ✅ | via MCP |
-| **AntiGravity (Gemini)** | ✅ | via MCP |
+| **AntiGravity (Jules)** | ✅ | via MCP |
 
 ---
 
@@ -63,7 +63,7 @@ Your IDE / AI Agent
 │                                    │
 │  Markdown files    → Human-readable, git-friendly
 │  SQLite FTS5       → Fast keyword search
-│  Local embedding   → Semantic search (optional, 23-118MB)
+│  Local embedding   → Semantic search (optional: npm i @huggingface/transformers)
 │  Knowledge cards   → Auto-extracted decisions, solutions, risks
 │  Web Dashboard     → http://localhost:37800/
 │                                    │
