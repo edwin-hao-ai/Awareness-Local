@@ -647,6 +647,27 @@ export class AwarenessLocalDaemon {
         const recentSessions = this.indexer.getRecentSessions(args.days ?? 7);
         const spec = this._loadSpec();
 
+        // Compute attention_summary for LLM-side triage
+        const now = Date.now();
+        const staleDays = 3;
+        const staleCutoff = now - staleDays * 86400000;
+        const staleTasks = openTasks.filter(t => {
+          const created = t.created_at ? new Date(t.created_at).getTime() : now;
+          return created < staleCutoff;
+        }).length;
+        const riskCards = this.indexer.db
+          .prepare("SELECT COUNT(*) as cnt FROM knowledge_cards WHERE (category = 'risk' OR category = 'pitfall') AND status = 'active'")
+          .get();
+        const highRisks = riskCards?.cnt || 0;
+
+        const attentionSummary = {
+          stale_tasks: staleTasks,
+          high_risks: highRisks,
+          total_open_tasks: openTasks.length,
+          total_knowledge_cards: recentCards.length,
+          needs_attention: staleTasks > 0 || highRisks > 0,
+        };
+
         return {
           content: [{
             type: 'text',
@@ -657,6 +678,7 @@ export class AwarenessLocalDaemon {
               open_tasks: openTasks,
               recent_sessions: recentSessions,
               stats,
+              attention_summary: attentionSummary,
               synthesized_rules: spec.core_lines?.join('\n') || '',
               init_guides: spec.init_guides || {},
               agent_profiles: [],

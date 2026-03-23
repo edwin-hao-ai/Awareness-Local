@@ -58,7 +58,7 @@
     {
       "name": "awareness_init",
       "short_desc": "Load cross-session project memory and context",
-      "long_desc": "Load cross-session project memory. Returns session_id, context (narratives, tasks, knowledge, active_skills), and usage rules. Call ONCE at session start."
+      "long_desc": "Load cross-session project memory. Returns session_id, context (narratives, tasks, knowledge, active_skills, attention_summary), and usage rules. Call ONCE at session start. ATTENTION PROTOCOL: When context.attention_summary.needs_attention is true, review all attention items (stale tasks, high risks) and automatically: (1) remind the user about stale tasks, (2) warn about high risks before starting work, (3) update resolved items via awareness_record."
     },
     {
       "name": "awareness_get_agent_prompt",
@@ -385,7 +385,8 @@
       "notes_lines": [
         "## OpenClaw Notes",
         "- OpenClaw uses a plugin-based configuration via ~/.openclaw/openclaw.json.",
-        "- Install the Awareness plugin: openclaw plugins install @awareness-sdk/openclaw-memory",
+        "- Install as plugin: openclaw plugins install @awareness-sdk/openclaw-memory",
+        "- Or install as skill: npx clawhub@latest install awareness-memory",
         "- MCP tools are exposed through the plugin system, no rules file needed."
       ]
     }
