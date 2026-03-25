@@ -1072,6 +1072,8 @@ export class AwarenessLocalDaemon {
     const config = this._loadConfig();
     const cloud = config.cloud || {};
 
+    const history = this.cloudSync ? this.cloudSync.getSyncHistory() : [];
+
     return jsonResponse(res, {
       cloud_enabled: !!cloud.enabled,
       api_base: cloud.api_base || null,
@@ -1079,6 +1081,7 @@ export class AwarenessLocalDaemon {
       auto_sync: cloud.auto_sync ?? true,
       last_push_at: cloud.last_push_at || null,
       last_pull_at: cloud.last_pull_at || null,
+      history,
     });
   }
 

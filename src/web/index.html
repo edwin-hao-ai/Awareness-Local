@@ -215,6 +215,17 @@ body {
 .sync-history { margin-top: 20px; }
 .sync-history h4 { font-size: 0.9rem; font-weight: 600; margin-bottom: 12px; color: var(--text-secondary); }
 .sync-history-empty { font-size: 0.85rem; color: var(--text-muted); padding: 16px; text-align: center; }
+.sync-history-list { max-height: 300px; overflow-y: auto; }
+.sync-history-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+.sync-history-item:last-child { border-bottom: none; }
+.sync-history-icon { font-size: 1rem; flex-shrink: 0; }
+.sync-history-type { font-weight: 500; min-width: 70px; }
+.sync-history-count { color: var(--text-secondary); }
+.sync-history-time { margin-left: auto; color: var(--text-muted); font-size: 0.8rem; white-space: nowrap; }
 
 /* ---- Settings ---- */
 .settings-section { margin-bottom: 28px; }
@@ -753,6 +764,31 @@ async function loadSync() {
     titleEl.textContent = 'Not Connected to Cloud';
     descEl.textContent = 'Memories are stored locally only. Connect to cloud for backup and cross-device sync.';
     btnEl.textContent = 'Connect to Cloud';
+  }
+
+  // Render sync history
+  var historyEl = document.getElementById('sync-history');
+  if (data.history && data.history.length > 0) {
+    var html = '<h4>Sync History</h4><div class="sync-history-list">';
+    for (var i = 0; i < data.history.length; i++) {
+      var item = data.history[i];
+      var dir = (item.details && item.details.direction) || 'push';
+      var icon = dir === 'pull' ? '\u2B07\uFE0F' : '\u2B06\uFE0F';
+      var type = item.type || 'memories';
+      var count = (item.details && item.details.count) || 0;
+      var time = item.timestamp ? formatDate(item.timestamp) : '';
+      html += '<div class="sync-history-item">'
+        + '<span class="sync-history-icon">' + icon + '</span>'
+        + '<span class="sync-history-type">' + type + '</span>'
+        + '<span class="sync-history-count">' + count + ' ' + dir + '</span>'
+        + '<span class="sync-history-time">' + time + '</span>'
+        + '</div>';
+    }
+    html += '</div>';
+    historyEl.innerHTML = html;
+  } else {
+    historyEl.innerHTML = '<h4>Sync History</h4>'
+      + '<div class="sync-history-empty">No sync history yet. Connect to cloud to enable sync.</div>';
   }
 }
 

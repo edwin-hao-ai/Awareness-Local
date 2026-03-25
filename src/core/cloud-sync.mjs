@@ -375,6 +375,10 @@ export class CloudSync {
       console.error(`${LOG_PREFIX} syncToCloud failed:`, err.message);
     }
 
+    if (synced > 0) {
+      this._recordSyncEvent('memories', { count: synced, direction: 'push' });
+    }
+
     return { synced, errors };
   }
 
@@ -426,6 +430,7 @@ export class CloudSync {
 
       if (pulled > 0) {
         console.log(`${LOG_PREFIX} Pulled ${pulled} memories from cloud`);
+        this._recordSyncEvent('memories', { count: pulled, direction: 'pull' });
       }
     } catch (err) {
       console.error(`${LOG_PREFIX} pullFromCloud failed:`, err.message);
@@ -496,6 +501,7 @@ export class CloudSync {
 
       if (synced > 0) {
         console.log(`${LOG_PREFIX} Pushed ${synced} knowledge cards to cloud` + (errors ? ` (${errors} errors)` : ''));
+        this._recordSyncEvent('insights', { count: synced, direction: 'push' });
       }
     } catch (err) {
       console.error(`${LOG_PREFIX} syncInsightsToCloud failed:`, err.message);
@@ -563,6 +569,7 @@ export class CloudSync {
 
       if (synced > 0) {
         console.log(`${LOG_PREFIX} Pushed ${synced} tasks to cloud` + (errors ? ` (${errors} errors)` : ''));
+        this._recordSyncEvent('tasks', { count: synced, direction: 'push' });
       }
     } catch (err) {
       console.error(`${LOG_PREFIX} syncTasksToCloud failed:`, err.message);
@@ -1168,6 +1175,51 @@ export class CloudSync {
         .run(key, value, new Date().toISOString());
     } catch {
       // Non-critical — log and continue
+    }
+  }
+
+  // =========================================================================
+  // Public — sync history
+  // =========================================================================
+
+  /**
+   * Record a sync event to the sync_state table for history tracking.
+   * @param {string} type — "memories" | "insights" | "tasks"
+   * @param {object} details — { count, direction: "push"|"pull" }
+   */
+  _recordSyncEvent(type, details) {
+    try {
+      const timestamp = new Date().toISOString();
+      const key = `sync_log:${timestamp}`;
+      const value = JSON.stringify({ type, details, timestamp });
+      this._setSyncState(key, value);
+    } catch {
+      // Non-critical — don't crash on history logging failure
+    }
+  }
+
+  /**
+   * Get recent sync history events.
+   * @param {number} [limit=20] — Maximum number of events to return
+   * @returns {Array<{ type: string, details: object, timestamp: string }>}
+   */
+  getSyncHistory(limit = 20) {
+    try {
+      const rows = this.indexer.db
+        .prepare(
+          `SELECT value FROM sync_state WHERE key LIKE 'sync_log:%' ORDER BY key DESC LIMIT ?`
+        )
+        .all(limit);
+
+      return rows.map((row) => {
+        try {
+          return JSON.parse(row.value);
+        } catch {
+          return null;
+        }
+      }).filter(Boolean);
+    } catch {
+      return [];
     }
   }
 
