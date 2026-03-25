@@ -433,6 +433,17 @@ async function cmdReindex(flags) {
   }
 }
 
+/**
+ * Run as a stdio MCP server (for IDE integrations like Claude Code).
+ */
+async function cmdMcp(flags) {
+  const projectDir = resolveProjectDir(flags);
+  const port = resolvePort(flags);
+
+  const { startStdioMcp } = await import('../src/mcp-stdio.mjs');
+  await startStdioMcp({ port, projectDir });
+}
+
 // ---------------------------------------------------------------------------
 // Help
 // ---------------------------------------------------------------------------
@@ -449,6 +460,7 @@ Commands:
   stop      Stop the daemon
   status    Show daemon status and stats
   reindex   Rebuild the search index
+  mcp       Run as stdio MCP server
 
 Options:
   --project <dir>   Project directory (default: current directory)
@@ -461,6 +473,7 @@ Examples:
   npx @awareness-sdk/local status
   npx @awareness-sdk/local stop
   npx @awareness-sdk/local reindex --project /path/to/project
+  npx @awareness-sdk/local mcp --project /path/to/project --port 37800
 `);
 }
 
@@ -488,6 +501,9 @@ async function main() {
       break;
     case 'reindex':
       await cmdReindex(flags);
+      break;
+    case 'mcp':
+      await cmdMcp(flags);
       break;
     default:
       console.error(`Unknown command: ${command}`);

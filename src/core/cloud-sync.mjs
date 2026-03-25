@@ -300,13 +300,11 @@ export class CloudSync {
 
       for (const memory of unsynced) {
         try {
-          // Read the full markdown content from disk
+          // Read the markdown content from disk, strip YAML front matter
           let content = '';
           try {
-            content = fs.readFileSync(
-              memory.filepath,
-              'utf-8'
-            );
+            const raw = fs.readFileSync(memory.filepath, 'utf-8');
+            content = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '').trim();
           } catch {
             // File may have been deleted — skip
             console.warn(`${LOG_PREFIX} File not found, skipping: ${memory.filepath}`);
