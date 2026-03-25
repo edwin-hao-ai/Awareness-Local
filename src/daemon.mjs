@@ -665,7 +665,13 @@ export class AwarenessLocalDaemon {
         const stats = this.indexer.getStats();
         const recentCards = this.indexer.getRecentKnowledge(args.max_cards ?? 5);
         const openTasks = this.indexer.getOpenTasks(args.max_tasks ?? 0);
-        const recentSessions = this.indexer.getRecentSessions(args.days ?? 7);
+        const rawSessions = this.indexer.getRecentSessions(args.days ?? 7);
+        // De-noise: only sessions with content; fallback to 3 most recent
+        let recentSessions = rawSessions.filter(s => s.memory_count > 0 || s.summary);
+        if (recentSessions.length === 0) {
+          recentSessions = rawSessions.slice(0, 3);
+        }
+        recentSessions = recentSessions.slice(0, 5);
         const spec = this._loadSpec();
 
         // Compute attention_summary for LLM-side triage
@@ -851,6 +857,11 @@ export class AwarenessLocalDaemon {
       return this._apiListKnowledge(req, res, url);
     }
 
+    // DELETE /api/v1/knowledge/cleanup — batch-delete cards matching regex patterns
+    if (route === '/knowledge/cleanup' && req.method === 'DELETE') {
+      return await this._apiCleanupKnowledge(req, res);
+    }
+
     // GET /api/v1/tasks
     if (route === '/tasks' && req.method === 'GET') {
       return this._apiListTasks(req, res, url);
@@ -986,6 +997,72 @@ export class AwarenessLocalDaemon {
 
     const rows = this.indexer.db.prepare(sql).all(...params);
     return jsonResponse(res, { items: rows, total: rows.length });
+  }
+
+  /**
+   * DELETE /api/v1/knowledge/cleanup
+   * Batch-delete knowledge cards whose title matches any of the provided regex patterns.
+   * Request body: { patterns: ["^Tool:", "^Assistant:", ...] }
+   * Response: { deleted: N }
+   */
+  async _apiCleanupKnowledge(req, res) {
+    if (!this.indexer) {
+      return jsonResponse(res, { deleted: 0 });
+    }
+
+    let body;
+    try {
+      const raw = await readBody(req);
+      body = JSON.parse(raw);
+    } catch {
+      return jsonResponse(res, { error: 'Invalid JSON body' }, 400);
+    }
+
+    const patterns = body?.patterns;
+    if (!Array.isArray(patterns) || patterns.length === 0) {
+      return jsonResponse(res, { error: 'patterns must be a non-empty array of regex strings' }, 400);
+    }
+
+    // Compile regex patterns
+    let regexes;
+    try {
+      regexes = patterns.map(p => new RegExp(p));
+    } catch (err) {
+      return jsonResponse(res, { error: `Invalid regex: ${err.message}` }, 400);
+    }
+
+    // Query all active knowledge cards
+    const allCards = this.indexer.db
+      .prepare("SELECT id, title, filepath FROM knowledge_cards WHERE status = 'active'")
+      .all();
+
+    const toDelete = allCards.filter(card =>
+      regexes.some(re => re.test(card.title))
+    );
+
+    if (toDelete.length === 0) {
+      return jsonResponse(res, { deleted: 0 });
+    }
+
+    // Delete from SQLite tables + FTS index, and remove markdown files
+    const deleteCard = this.indexer.db.prepare('DELETE FROM knowledge_cards WHERE id = ?');
+    const deleteFts = this.indexer.db.prepare('DELETE FROM knowledge_fts WHERE id = ?');
+    const deleteMany = this.indexer.db.transaction((cards) => {
+      for (const card of cards) {
+        deleteCard.run(card.id);
+        deleteFts.run(card.id);
+      }
+    });
+    deleteMany(toDelete);
+
+    // Remove corresponding markdown files
+    for (const card of toDelete) {
+      if (card.filepath) {
+        try { fs.unlinkSync(card.filepath); } catch { /* file may already be gone */ }
+      }
+    }
+
+    return jsonResponse(res, { deleted: toDelete.length });
   }
 
   /**
@@ -1614,7 +1691,11 @@ ${item.description || item.title || ''}
         const stats = this.indexer.getStats();
         const knowledge = this.indexer.getRecentKnowledge(limit);
         const tasks = this.indexer.getOpenTasks(0);
-        const sessions = this.indexer.getRecentSessions(7);
+        const rawSessions = this.indexer.getRecentSessions(7);
+        // De-noise: only sessions with content; fallback to 3 most recent
+        let sessions = rawSessions.filter(s => s.memory_count > 0 || s.summary);
+        if (sessions.length === 0) sessions = rawSessions.slice(0, 3);
+        sessions = sessions.slice(0, 5);
         const { user_preferences, knowledge_cards: otherCards } = splitPreferences(knowledge);
         return { stats, user_preferences, knowledge_cards: otherCards, open_tasks: tasks, recent_sessions: sessions, mode: 'local' };
       }

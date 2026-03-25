@@ -33,6 +33,7 @@
     "  Skipping = permanent data loss.",
     "",
     "STEP 4 - CATEGORY GUIDE (for insights.knowledge_cards):",
+    "  Engineering:",
     "  - decision = choice made between alternatives.",
     "  - problem_solution = bug/problem plus the fix that resolved it.",
     "  - workflow = process, setup, or configuration steps only.",
@@ -40,6 +41,14 @@
     "  - insight = reusable pattern or general learning.",
     "  - skill = reusable procedure done 2+ times; summary = injectable instruction, methods = steps.",
     "  - key_point = important technical fact when nothing else fits.",
+    "  Personal (use when user shares preferences or personal info):",
+    "  - personal_preference = user's preferences, style, habits (e.g. 'I prefer dark mode', 'always use TypeScript').",
+    "  - important_detail = user's role, team, project context, relationships.",
+    "  - plan_intention = user's goals, plans, upcoming deadlines.",
+    "  - activity_preference = hobbies, interests, routines.",
+    "  - health_info = health-related notes shared by user.",
+    "  - career_info = job, skills, career goals.",
+    "  - custom_misc = anything personal that doesn't fit above.",
     "  Never default everything to workflow.",
     "",
     "STEP 5 - SESSION END:",
@@ -58,7 +67,7 @@
     {
       "name": "awareness_init",
       "short_desc": "Load cross-session project memory and context",
-      "long_desc": "Load cross-session project memory. Returns session_id, context (narratives, tasks, knowledge, active_skills, attention_summary), and usage rules. Call ONCE at session start. ATTENTION PROTOCOL: When context.attention_summary.needs_attention is true, review all attention items (stale tasks, high risks) and automatically: (1) remind the user about stale tasks, (2) warn about high risks before starting work, (3) update resolved items via awareness_record."
+      "long_desc": "Load cross-session project memory. Returns session_id, user_preferences (personal preferences, identity, career — highest priority, present FIRST), context (narratives, tasks, knowledge, active_skills, attention_summary), and usage rules. Call ONCE at session start. ATTENTION PROTOCOL: When context.attention_summary.needs_attention is true, review all attention items (stale tasks, high risks) and automatically: (1) remind the user about stale tasks, (2) warn about high risks before starting work, (3) update resolved items via awareness_record."
     },
     {
       "name": "awareness_get_agent_prompt",
@@ -165,7 +174,7 @@
       "label": "Claude Code",
       "rules_file": "CLAUDE.md",
       "mcp_path": ".mcp.json",
-      "mcp_config_variant": "sse",
+      "mcp_config_variant": "http",
       "strategy": "managed_block",
       "conflict_policy": "error_on_invalid_markers",
       "header": "# Project Memory (Awareness MCP)",

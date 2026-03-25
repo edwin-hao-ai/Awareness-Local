@@ -84,8 +84,14 @@ export class KnowledgeExtractor {
     if (preExtractedInsights && this._hasInsights(preExtractedInsights)) {
       result = this.processPreExtracted(preExtractedInsights, metadata);
     } else {
-      // Layer 2: Rule engine fallback (SDK/API writes without agent)
-      result = this.extractByRules(content, metadata);
+      // Skip rule engine for raw tool captures — they produce low-quality cards
+      const skipTypes = new Set(['tool_use', 'code_change', 'session_checkpoint']);
+      if (skipTypes.has(metadata?.type)) {
+        result = { cards: [], tasks: [], risks: [] };
+      } else {
+        // Layer 2: Rule engine fallback (SDK/API writes without agent)
+        result = this.extractByRules(content, metadata);
+      }
     }
 
     // Persist extracted artifacts to disk + index
