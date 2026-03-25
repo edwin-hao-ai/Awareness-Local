@@ -1422,14 +1422,19 @@ export class AwarenessLocalDaemon {
       return { error: 'items array is required for remember_batch' };
     }
 
+    // Batch-level insights go to the last item (summary item)
+    const batchInsights = params.insights || null;
+
     const results = [];
-    for (const item of items) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const isLast = i === items.length - 1;
       const result = await this._remember({
         content: item.content,
         title: item.title,
         event_type: item.event_type,
         tags: item.tags,
-        insights: item.insights,
+        insights: item.insights || (isLast ? batchInsights : null),
         session_id: params.session_id,
         agent_role: params.agent_role,
       });

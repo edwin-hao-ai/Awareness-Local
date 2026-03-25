@@ -237,6 +237,19 @@ async function cmdStart(flags) {
       console.log(`  MCP endpoint: http://localhost:${port}/mcp`);
       console.log(`  Dashboard:    http://localhost:${port}/`);
       console.log(`  Log file:     ${logPath}`);
+
+      // Auto-open dashboard on first daemon start
+      const firstRunFlag = path.join(awarenessDir, '.first-run-done');
+      if (!fs.existsSync(firstRunFlag)) {
+        try {
+          fs.writeFileSync(firstRunFlag, new Date().toISOString());
+          const url = `http://localhost:${port}/`;
+          const { exec } = await import('node:child_process');
+          if (process.platform === 'darwin') exec(`open "${url}"`);
+          else if (process.platform === 'linux') exec(`xdg-open "${url}"`);
+          else if (process.platform === 'win32') exec(`start "" "${url}"`);
+        } catch { /* ignore open failures */ }
+      }
     } else {
       console.error('Failed to start daemon. Check log file:');
       console.error(`  ${logPath}`);
