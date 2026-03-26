@@ -17,9 +17,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
-// Conflict detection thresholds (BM25 rank is negative — closer to 0 = better match)
-const BM25_DUPLICATE_THRESHOLD = -8;  // rank > this → likely duplicate
-const BM25_UPDATE_THRESHOLD = -12;    // rank > this → likely update
+// Conflict detection thresholds for SQLite FTS5 trigram tokenizer.
+// bm25() returns negative values — closer to 0 = better match.
+// Trigram range is typically -0.1 to -3.0 (much narrower than PostgreSQL ts_rank).
+const BM25_DUPLICATE_THRESHOLD = -1.0;  // rank > this → very close match, skip
+const BM25_UPDATE_THRESHOLD = -2.0;     // rank > this → similar enough for evolution
 // Vector cosine similarity thresholds (same as cloud backend)
 const VECTOR_DUPLICATE_THRESHOLD = 0.95;
 const VECTOR_UPDATE_THRESHOLD = 0.85;
@@ -478,7 +480,9 @@ export class KnowledgeExtractor {
       return { verdict: 'new' };
     }
 
-    const queryText = `${card.title} ${card.summary || ''}`.trim();
+    // Use title only for BM25 search — long title+summary phrases fail with
+    // trigram tokenizer because quoted phrases require exact sequential match.
+    const queryText = (card.title || '').trim();
     if (!queryText) return { verdict: 'new' };
 
     // Layer 1: BM25 full-text search
