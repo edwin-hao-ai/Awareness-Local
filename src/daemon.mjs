@@ -1582,12 +1582,126 @@ export class AwarenessLocalDaemon {
       });
     }
 
-    return {
+    // Perception: surface signals the agent didn't ask about (Eywa Whisper)
+    const perception = this._buildPerception(params.content, title, memory, params.insights);
+
+    const result = {
       status: 'ok',
       id,
       filepath,
       mode: 'local',
     };
+
+    if (perception && perception.length > 0) {
+      result.perception = perception;
+    }
+
+    return result;
+  }
+
+  /**
+   * Build perception signals after a record operation (Eywa Whisper).
+   *
+   * Unlike recall (agent asks a question), perception is the system
+   * noticing something the agent didn't ask about:
+   * - resonance: similar past knowledge exists
+   * - pattern: recurring category/theme detected (3+)
+   * - staleness: related knowledge is old
+   *
+   * Zero LLM. Pure SQLite queries. Target: <20ms.
+   *
+   * @param {string} content - The content being recorded
+   * @param {string} title - Auto-generated or provided title
+   * @param {Object} memory - The memory metadata object
+   * @param {Object} [insights] - Optional pre-extracted insights
+   * @returns {Array<Object>} perception signals (max 5)
+   */
+  _buildPerception(content, title, memory, insights) {
+    const signals = [];
+
+    try {
+      // 1. Resonance: find similar existing knowledge cards via FTS5
+      if (title && title.length >= 5) {
+        const resonanceResults = this.indexer.searchKnowledge(title, { limit: 2 });
+        for (const r of resonanceResults) {
+          // BM25 rank: closer to 0 = better match. Only surface strong matches.
+          if (r.rank > -3.0) {
+            const daysAgo = r.created_at
+              ? Math.floor((Date.now() - new Date(r.created_at).getTime()) / 86400000)
+              : 0;
+            signals.push({
+              type: 'resonance',
+              title: r.title,
+              summary: (r.summary || '').slice(0, 150),
+              category: r.category || '',
+              card_id: r.id,
+              days_ago: daysAgo,
+              message: `🌿 Similar past experience (${daysAgo}d ago): "${r.title}"`,
+            });
+          }
+        }
+      }
+
+      // 2. Pattern: detect recurring categories (3+ cards of same category)
+      if (insights?.knowledge_cards?.length) {
+        for (const card of insights.knowledge_cards) {
+          const cat = card.category;
+          if (!cat) continue;
+          try {
+            const row = this.indexer.db
+              .prepare(`SELECT COUNT(*) AS cnt FROM knowledge_cards WHERE category = ? AND status = 'active'`)
+              .get(cat);
+            const count = row?.cnt || 0;
+            if (count >= 3) {
+              signals.push({
+                type: 'pattern',
+                category: cat,
+                count: count + 1, // +1 for the one being written now
+                message: `🔄 Pattern: this is the ${this._ordinal(count + 1)} '${cat}' card — recurring theme`,
+              });
+            }
+          } catch { /* ignore */ }
+        }
+      }
+
+      // 3. Staleness: find related but old knowledge (reuse searchKnowledge for FTS safety)
+      if (title && title.length >= 5) {
+        try {
+          const relatedResults = this.indexer.searchKnowledge(title, { limit: 3 });
+          for (const r of relatedResults) {
+            if (!r.updated_at) continue;
+            const daysOld = Math.floor(
+              (Date.now() - new Date(r.updated_at).getTime()) / 86400000
+            );
+            if (daysOld >= 60) {
+              signals.push({
+                type: 'staleness',
+                title: r.title,
+                category: r.category || '',
+                card_id: r.id,
+                days_since_update: daysOld,
+                message: `⏳ Related knowledge "${r.title}" hasn't been updated in ${daysOld} days`,
+              });
+              break; // Only 1 staleness signal
+            }
+          }
+        } catch { /* FTS query may fail on special chars */ }
+      }
+    } catch (err) {
+      // Perception is best-effort, never block the write
+      if (process.env.DEBUG) {
+        console.warn('[awareness-local] perception failed:', err.message);
+      }
+    }
+
+    return signals.slice(0, 5); // Cap at 5 signals
+  }
+
+  /** Return ordinal string (1st, 2nd, 3rd, etc.) */
+  _ordinal(n) {
+    if (n % 100 >= 11 && n % 100 <= 13) return `${n}th`;
+    const suffix = { 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th';
+    return `${n}${suffix}`;
   }
 
   /** Write multiple memories in batch. */
