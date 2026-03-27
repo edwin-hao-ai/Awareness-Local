@@ -1687,6 +1687,66 @@ export class AwarenessLocalDaemon {
           }
         } catch { /* FTS query may fail on special chars */ }
       }
+
+      // 4. Contradiction: surface recently superseded cards (1-day window)
+      try {
+        const oneDayAgo = new Date(Date.now() - 86400000).toISOString();
+        const superseded = this.indexer.db
+          .prepare(
+            `SELECT id, title, category, summary FROM knowledge_cards
+             WHERE status = 'superseded' AND updated_at > ?
+             ORDER BY updated_at DESC LIMIT 2`
+          )
+          .all(oneDayAgo);
+        for (const r of superseded) {
+          signals.push({
+            type: 'contradiction',
+            title: r.title,
+            summary: (r.summary || '').slice(0, 150),
+            card_id: r.id,
+            message: `⚡ This may contradict a prior belief: "${r.title}"`,
+          });
+        }
+      } catch { /* ignore */ }
+
+      // 5. Related_decision: find prior decisions with overlapping tags
+      if (insights?.knowledge_cards?.length) {
+        try {
+          const newTags = new Set();
+          for (const card of insights.knowledge_cards) {
+            const tags = card.tags || [];
+            for (const tag of (Array.isArray(tags) ? tags : [])) {
+              if (typeof tag === 'string' && tag.length >= 2) {
+                newTags.add(tag.toLowerCase());
+              }
+            }
+          }
+          if (newTags.size > 0) {
+            const decisions = this.indexer.db
+              .prepare(
+                `SELECT id, title, summary, tags FROM knowledge_cards
+                 WHERE category = 'decision' AND status = 'active'
+                 ORDER BY created_at DESC LIMIT 20`
+              )
+              .all();
+            for (const d of decisions) {
+              let cardTags = [];
+              try { cardTags = JSON.parse(d.tags || '[]'); } catch { /* skip */ }
+              const overlap = cardTags.some(t => typeof t === 'string' && newTags.has(t.toLowerCase()));
+              if (overlap) {
+                signals.push({
+                  type: 'related_decision',
+                  title: d.title,
+                  summary: (d.summary || '').slice(0, 150),
+                  card_id: d.id,
+                  message: `📌 Related prior decision: "${d.title}"`,
+                });
+                if (signals.filter(s => s.type === 'related_decision').length >= 2) break;
+              }
+            }
+          }
+        } catch { /* ignore */ }
+      }
     } catch (err) {
       // Perception is best-effort, never block the write
       if (process.env.DEBUG) {
