@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.12] - 2026-03-27
+
+### Fixed
+- **Knowledge card category fix (proper approach)**: Replaced hardcoded English alias map with proper fix at source — `awareness_record` MCP tool schema now explicitly enumerates all 13 valid categories in `describe()`. LLMs read the schema and output valid values directly. `normalizeCategory()` simplified to case/whitespace normalization + strict `VALID_CATEGORIES` lookup + fallback `key_point`. No language-specific aliases needed.
+
 ## [0.3.11] - 2026-03-27
 
 ### Fixed

@@ -26,56 +26,14 @@ const VALID_CATEGORIES = new Set([
   'risk', 'skill',
 ]);
 
-// Map non-standard LLM-generated categories to standard ones
-const CATEGORY_ALIASES = {
-  'troubleshooting': 'problem_solution',
-  'bug_fix': 'problem_solution',
-  'bugfix': 'problem_solution',
-  'fix': 'problem_solution',
-  'best_practice': 'insight',
-  'best-practice': 'insight',
-  'bestpractice': 'insight',
-  'pattern': 'insight',
-  'tip': 'insight',
-  'lesson': 'insight',
-  'learning': 'insight',
-  'setup': 'workflow',
-  'configuration': 'workflow',
-  'config': 'workflow',
-  'process': 'workflow',
-  'procedure': 'workflow',
-  'guide': 'workflow',
-  'howto': 'workflow',
-  'how_to': 'workflow',
-  'warning': 'pitfall',
-  'limitation': 'pitfall',
-  'gotcha': 'pitfall',
-  'caveat': 'pitfall',
-  'note': 'key_point',
-  'fact': 'key_point',
-  'reference': 'key_point',
-  'preference': 'personal_preference',
-  'goal': 'plan_intention',
-  'plan': 'plan_intention',
-  'task': 'plan_intention',
-  'hobby': 'activity_preference',
-  'interest': 'activity_preference',
-  'job': 'career_info',
-  'role': 'career_info',
-};
-
-/** Normalize a category string to a valid standard category. */
+/** Normalize a category string to a valid standard category.
+ *  Only does case/whitespace normalization — no language-specific aliases.
+ *  The MCP tool schema already enumerates valid categories so LLMs output them directly.
+ */
 function normalizeCategory(raw) {
   if (!raw) return 'key_point';
-  const lower = raw.trim().toLowerCase().replace(/[\s-]+/g, '_');
-  if (VALID_CATEGORIES.has(lower)) return lower;
-  if (CATEGORY_ALIASES[lower]) return CATEGORY_ALIASES[lower];
-  // Try partial match for compound names like BEST-PRACTICE, TROUBLESHOOTING
-  for (const [alias, target] of Object.entries(CATEGORY_ALIASES)) {
-    if (lower.includes(alias.replace(/_/g, '')) || alias.replace(/_/g, '').includes(lower)) {
-      return target;
-    }
-  }
+  const normalized = raw.trim().toLowerCase().replace(/[\s\-]+/g, '_');
+  if (VALID_CATEGORIES.has(normalized)) return normalized;
   return 'key_point';
 }
 

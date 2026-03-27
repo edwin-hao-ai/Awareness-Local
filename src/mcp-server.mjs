@@ -299,7 +299,18 @@ export class LocalMcpServer {
           insights: z.any().optional(),
         })).optional().describe('Batch items for remember_batch'),
         insights: z.object({
-          knowledge_cards: z.array(z.any()).optional(),
+          knowledge_cards: z.array(z.object({
+            title: z.string().describe('Short descriptive title'),
+            summary: z.string().optional().describe('Detailed summary (also accepted as "content")'),
+            content: z.string().optional().describe('Alias for summary'),
+            category: z.string().optional().describe(
+              'MUST be one of: problem_solution, decision, workflow, key_point, pitfall, insight, ' +
+              'personal_preference, important_detail, plan_intention, activity_preference, ' +
+              'health_info, career_info, custom_misc. Unknown values default to key_point.'
+            ),
+            tags: z.array(z.string()).optional(),
+            confidence: z.number().optional(),
+          })).optional(),
           action_items: z.array(z.any()).optional(),
           risks: z.array(z.any()).optional(),
         }).optional().describe('Pre-extracted knowledge cards, tasks, risks'),
