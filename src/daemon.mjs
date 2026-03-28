@@ -31,6 +31,7 @@ import { MemoryStore } from './core/memory-store.mjs';
 import { Indexer } from './core/indexer.mjs';
 import { CloudSync } from './core/cloud-sync.mjs';
 import { LocalMcpServer } from './mcp-server.mjs';
+import { buildContextXml } from './harness-builder.mjs';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -45,6 +46,48 @@ const LOG_FILENAME = 'daemon.log';
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Create a noop indexer fallback when better-sqlite3 is not available.
+ * Provides stubs for every method/property accessed on the real Indexer,
+ * including `db.prepare(sql).get/all/run()` and `db.transaction()`.
+ */
+function createNoopIndexer() {
+  const noopStmt = { get: () => undefined, all: () => [], run: () => ({}) };
+  const noopDb = {
+    prepare: () => noopStmt,
+    transaction: (fn) => fn,
+    exec: () => {},
+    pragma: () => {},
+  };
+  return {
+    db: noopDb,
+    incrementalIndex: async () => ({ indexed: 0, skipped: 0 }),
+    indexMemory: () => ({ indexed: false }),
+    indexKnowledgeCard: () => {},
+    indexTask: () => {},
+    search: () => [],
+    searchKnowledge: () => [],
+    getRecentKnowledge: () => [],
+    getRecentMemories: () => [],
+    getOpenTasks: () => [],
+    getRecentSessions: () => [],
+    getStats: () => ({ totalMemories: 0, totalKnowledge: 0, totalTasks: 0, totalSessions: 0 }),
+    createSession: (source, agentRole = 'builder_agent') => ({
+      id: `ses_${Date.now()}_noop`,
+      source: source || null,
+      agent_role: agentRole,
+      started_at: new Date().toISOString(),
+    }),
+    updateSession: () => {},
+    supersedeCard: () => false,
+    getEvolutionChain: () => [],
+    storeEmbedding: () => {},
+    getEmbedding: () => null,
+    getAllEmbeddings: () => [],
+    close: () => {},
+  };
+}
 
 /** Current ISO timestamp. */
 function nowISO() {
@@ -69,6 +112,79 @@ function splitPreferences(cards) {
     }
   }
   return { user_preferences: prefs, knowledge_cards: other };
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic rule synthesis from knowledge cards (zero-LLM)
+// ---------------------------------------------------------------------------
+
+const CATEGORY_TO_RULE_TYPE = {
+  decision: 'architecture', workflow: 'workflow', pitfall: 'pitfall',
+  problem_solution: 'solution', key_point: 'knowledge', insight: 'knowledge',
+  personal_preference: 'preference', activity_preference: 'preference',
+  important_detail: 'context', plan_intention: 'context',
+  health_info: 'context', career_info: 'context', custom_misc: 'context',
+};
+
+/**
+ * Synthesize rules from knowledge cards, prioritised by type.
+ * @param {object[]} cards — active knowledge cards
+ * @param {number} [maxRules=30]
+ * @returns {{ rules: object[], rule_count: number }}
+ */
+function synthesizeRules(cards, maxRules = 30) {
+  const buckets = {};
+  for (const card of cards) {
+    const ruleType = CATEGORY_TO_RULE_TYPE[card.category] || 'knowledge';
+    if (!buckets[ruleType]) buckets[ruleType] = [];
+
+    // Prefer actionable_rule, fall back to summary
+    const ruleText = (card.actionable_rule || '').trim() || card.summary || '';
+    if (!ruleText) continue;
+
+    buckets[ruleType].push({
+      id: `rule_${(card.id || '').slice(0, 8)}`,
+      rule_type: ruleType,
+      title: card.title || '',
+      rule: ruleText,
+      confidence: card.confidence || 0.8,
+      tags: card.tags ? (typeof card.tags === 'string' ? JSON.parse(card.tags) : card.tags) : [],
+    });
+  }
+
+  const priority = ['preference', 'architecture', 'pitfall', 'workflow', 'solution', 'knowledge', 'context'];
+  const rules = [];
+  for (const type of priority) {
+    const bucket = (buckets[type] || []).slice(0, 8);
+    for (const r of bucket) {
+      if (rules.length >= maxRules) break;
+      rules.push(r);
+    }
+    if (rules.length >= maxRules) break;
+  }
+  return { rules, rule_count: rules.length };
+}
+
+/**
+ * Extract active skills from knowledge cards (category === 'skill').
+ * @param {object[]} cards
+ * @returns {object[]}
+ */
+function extractActiveSkills(cards) {
+  return cards
+    .filter(c => c.category === 'skill')
+    .map(c => {
+      let methods = [];
+      if (c.methods) {
+        methods = typeof c.methods === 'string' ? JSON.parse(c.methods) : c.methods;
+      }
+      if (!Array.isArray(methods)) methods = [];
+      return {
+        title: c.title || '',
+        summary: c.summary || '',
+        methods,
+      };
+    });
 }
 
 /**
@@ -214,9 +330,15 @@ export class AwarenessLocalDaemon {
 
     // ---- Init core modules ----
     this.memoryStore = new MemoryStore(this.projectDir);
-    this.indexer = new Indexer(
-      path.join(this.awarenessDir, 'index.db')
-    );
+    try {
+      this.indexer = new Indexer(
+        path.join(this.awarenessDir, 'index.db')
+      );
+    } catch (e) {
+      console.error(`[awareness-local] SQLite indexer unavailable: ${e.message}`);
+      console.error('[awareness-local] Falling back to file-only mode (no search). Install better-sqlite3: npm install better-sqlite3');
+      this.indexer = createNoopIndexer();
+    }
 
     // Search and extractor are optional Phase 1 modules — import dynamically
     // so that missing files don't break daemon startup.
@@ -272,10 +394,23 @@ export class AwarenessLocalDaemon {
       this._handleRequest(req, res)
     );
 
-    await new Promise((resolve, reject) => {
-      this.httpServer.on('error', reject);
-      this.httpServer.listen(this.port, BIND_HOST, () => resolve());
-    });
+    try {
+      await new Promise((resolve, reject) => {
+        this.httpServer.on('error', reject);
+        this.httpServer.listen(this.port, BIND_HOST, () => resolve());
+      });
+    } catch (err) {
+      if (err.code === 'EADDRINUSE') {
+        console.error(
+          `[awareness-local] Port ${this.port} is already in use.\n` +
+          `  Possible causes:\n` +
+          `  - Another awareness-local instance is running (try: awareness-local status)\n` +
+          `  - Another application is using port ${this.port}\n` +
+          `  Fix: Run "awareness-local stop" or "lsof -i :${this.port}" to find the process.`
+        );
+      }
+      throw err;
+    }
 
     this._startedAt = Date.now();
 
@@ -679,6 +814,8 @@ export class AwarenessLocalDaemon {
         } else {
           recentCards = this.indexer.getRecentKnowledge(maxCards);
         }
+        // Load all active cards for rule synthesis and skill extraction
+        const allActiveCards = this.indexer.getRecentKnowledge(200);
         const openTasks = this.indexer.getOpenTasks(args.max_tasks ?? 0);
         const rawSessions = this.indexer.getRecentSessions(args.days ?? 7);
         // De-noise: only sessions with content; fallback to 3 most recent
@@ -710,25 +847,41 @@ export class AwarenessLocalDaemon {
           needs_attention: staleTasks > 0 || highRisks > 0,
         };
 
+        // Dynamic rule synthesis from knowledge cards
+        const { rules, rule_count } = synthesizeRules(allActiveCards);
+        // Active skills from knowledge cards
+        const activeSkills = extractActiveSkills(allActiveCards);
+
         const { user_preferences, knowledge_cards: otherCards } = splitPreferences(recentCards);
+        const initResult = {
+          session_id: session.id,
+          mode: 'local',
+          user_preferences,
+          knowledge_cards: otherCards,
+          open_tasks: openTasks,
+          recent_sessions: recentSessions,
+          stats,
+          attention_summary: attentionSummary,
+          synthesized_rules: { rules, rule_count },
+          init_guides: spec.init_guides || {},
+          agent_profiles: [],
+          active_skills: activeSkills,
+          setup_hints: [],
+        };
+
+        // Render XML context
+        try {
+          initResult.rendered_context = buildContextXml(initResult, [], [], {
+            localUrl: `http://localhost:${this.port}`,
+          });
+        } catch {
+          // Non-fatal — client can still use structured data
+        }
+
         return {
           content: [{
             type: 'text',
-            text: JSON.stringify({
-              session_id: session.id,
-              mode: 'local',
-              user_preferences,
-              knowledge_cards: otherCards,
-              open_tasks: openTasks,
-              recent_sessions: recentSessions,
-              stats,
-              attention_summary: attentionSummary,
-              synthesized_rules: spec.core_lines?.join('\n') || '',
-              init_guides: spec.init_guides || {},
-              agent_profiles: [],
-              active_skills: [],
-              setup_hints: [],
-            }),
+            text: JSON.stringify(initResult),
           }],
         };
       }

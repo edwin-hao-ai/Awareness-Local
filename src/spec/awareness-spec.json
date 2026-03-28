@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "markers": {
     "start": "<!-- AWARENESS_RULES_START -->",
     "end": "<!-- AWARENESS_RULES_END -->"
@@ -23,7 +23,7 @@
     "  3. awareness_recall(detail='full', ids=[...]) → expand only what you need.",
     "",
     "STEP 3 - RECORD EVERY CHANGE:",
-    "  After EVERY code edit, decision, or bug fix:",
+    "  After EVERY file edit, call awareness_record IMMEDIATELY. Do NOT batch — record each change as it happens.",
     "  awareness_record(content=<detailed natural language description>,",
     "    insights={knowledge_cards:[...], action_items:[...], risks:[...]})",
     "  Content should be RICH and DETAILED — include reasoning, key code snippets,",
@@ -57,7 +57,9 @@
     "BACKFILL (if applicable):",
     "  If MCP connected late: awareness_record(content=<transcript>)",
     "",
-    "RULES VERSION: Pass rules_version=\"2\" to awareness_init so the server knows you have these rules.",
+    "If awareness_init returns rendered_context, inject it as system context verbatim — it contains pre-assembled memory relevant to this session.",
+    "",
+    "RULES VERSION: Pass rules_version=\"3\" to awareness_init so the server knows you have these rules.",
     "If the server returns _setup_action, the rules have been updated — follow the instruction to re-sync.",
     "",
     "NOTE: memory_id from X-Awareness-Memory-Id header. source/actor/event_type auto-inferred."
@@ -127,7 +129,7 @@
       {
         "step": 3,
         "action": "awareness_record with inline insights",
-        "when": "AFTER every code edit, decision, or bug fix",
+        "when": "AFTER every file edit — record IMMEDIATELY, do NOT batch",
         "what": "awareness_record(content=<detailed description with reasoning, code snippets, user quotes, files changed>, insights={knowledge_cards:[...], action_items:[...], risks:[...]})",
         "done_check": "Every meaningful change has been recorded WITH rich detail AND structured insights"
       },

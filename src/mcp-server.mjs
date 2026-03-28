@@ -14,6 +14,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { buildContextXml } from './harness-builder.mjs';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -37,6 +38,78 @@ function splitPreferences(cards) {
     }
   }
   return { user_preferences: prefs, knowledge_cards: other };
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic rule synthesis from knowledge cards (zero-LLM)
+// ---------------------------------------------------------------------------
+
+const CATEGORY_TO_RULE_TYPE = {
+  decision: 'architecture', workflow: 'workflow', pitfall: 'pitfall',
+  problem_solution: 'solution', key_point: 'knowledge', insight: 'knowledge',
+  personal_preference: 'preference', activity_preference: 'preference',
+  important_detail: 'context', plan_intention: 'context',
+  health_info: 'context', career_info: 'context', custom_misc: 'context',
+};
+
+/**
+ * Synthesize rules from knowledge cards, prioritised by type.
+ * @param {object[]} cards — active knowledge cards
+ * @param {number} [maxRules=30]
+ * @returns {{ rules: object[], rule_count: number }}
+ */
+function synthesizeRules(cards, maxRules = 30) {
+  const buckets = {};
+  for (const card of cards) {
+    const ruleType = CATEGORY_TO_RULE_TYPE[card.category] || 'knowledge';
+    if (!buckets[ruleType]) buckets[ruleType] = [];
+
+    const ruleText = (card.actionable_rule || '').trim() || card.summary || '';
+    if (!ruleText) continue;
+
+    buckets[ruleType].push({
+      id: `rule_${(card.id || '').slice(0, 8)}`,
+      rule_type: ruleType,
+      title: card.title || '',
+      rule: ruleText,
+      confidence: card.confidence || 0.8,
+      tags: card.tags ? (typeof card.tags === 'string' ? JSON.parse(card.tags) : card.tags) : [],
+    });
+  }
+
+  const priority = ['preference', 'architecture', 'pitfall', 'workflow', 'solution', 'knowledge', 'context'];
+  const rules = [];
+  for (const type of priority) {
+    const bucket = (buckets[type] || []).slice(0, 8);
+    for (const r of bucket) {
+      if (rules.length >= maxRules) break;
+      rules.push(r);
+    }
+    if (rules.length >= maxRules) break;
+  }
+  return { rules, rule_count: rules.length };
+}
+
+/**
+ * Extract active skills from knowledge cards (category === 'skill').
+ * @param {object[]} cards
+ * @returns {object[]}
+ */
+function extractActiveSkills(cards) {
+  return cards
+    .filter(c => c.category === 'skill')
+    .map(c => {
+      let methods = [];
+      if (c.methods) {
+        methods = typeof c.methods === 'string' ? JSON.parse(c.methods) : c.methods;
+      }
+      if (!Array.isArray(methods)) methods = [];
+      return {
+        title: c.title || '',
+        summary: c.summary || '',
+        methods,
+      };
+    });
 }
 
 /**
@@ -128,6 +201,8 @@ export class LocalMcpServer {
           const recentCards = this.engine.indexer.getRecentKnowledge(
             params.max_cards ?? 5
           );
+          // Load all active cards for rule synthesis and skill extraction
+          const allActiveCards = this.engine.indexer.getRecentKnowledge(200);
           const openTasks = this.engine.indexer.getOpenTasks(
             params.max_tasks ?? 5
           );
@@ -138,8 +213,13 @@ export class LocalMcpServer {
           // Load workflow rules from awareness-spec.json
           const spec = this.engine.loadSpec();
 
+          // Dynamic rule synthesis from knowledge cards
+          const { rules, rule_count } = synthesizeRules(allActiveCards);
+          // Active skills from knowledge cards
+          const activeSkills = extractActiveSkills(allActiveCards);
+
           const { user_preferences, knowledge_cards: otherCards } = splitPreferences(recentCards);
-          return mcpResult({
+          const initResult = {
             session_id: session.id,
             mode: 'local',
             user_preferences,
@@ -147,14 +227,21 @@ export class LocalMcpServer {
             open_tasks: openTasks,
             recent_sessions: recentSessions,
             stats,
-            synthesized_rules: spec.core_lines?.join('\n') || '',
+            synthesized_rules: { rules, rule_count },
             init_guides: spec.init_guides || {},
-            // Local mode does not have agent_profiles, active_skills, setup_hints.
-            // Keep fields present (empty) for client compatibility.
             agent_profiles: [],
-            active_skills: [],
+            active_skills: activeSkills,
             setup_hints: [],
-          });
+          };
+
+          // Render XML context
+          try {
+            initResult.rendered_context = buildContextXml(initResult, [], [], {});
+          } catch {
+            // Non-fatal — client can still use structured data
+          }
+
+          return mcpResult(initResult);
         } catch (err) {
           return mcpError(`awareness_init failed: ${err.message}`);
         }
