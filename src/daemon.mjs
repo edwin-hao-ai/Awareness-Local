@@ -356,6 +356,13 @@ export class AwarenessLocalDaemon {
       console.error('[awareness-local] incremental index error:', err.message);
     }
 
+    // ---- Pre-warm embedding model + backfill (fire-and-forget, non-blocking) ----
+    if (this._embedder) {
+      this._warmupEmbedder().catch((err) => {
+        console.warn('[awareness-local] embedder warmup error:', err.message);
+      });
+    }
+
     // ---- MCP server ----
     this.mcpServer = new LocalMcpServer({
       memoryStore: this.memoryStore,
@@ -581,6 +588,7 @@ export class AwarenessLocalDaemon {
       pid: process.pid,
       port: this.port,
       project_dir: this.projectDir,
+      search_mode: this._embedder ? 'hybrid' : 'fts5-only',
       stats,
     });
   }
@@ -1729,6 +1737,9 @@ export class AwarenessLocalDaemon {
     // Index in SQLite
     this.indexer.indexMemory(id, { ...memory, filepath }, params.content);
 
+    // Generate and store embedding for vector search (fire-and-forget)
+    this._embedAndStore(id, params.content).catch(() => {});
+
     // Knowledge extraction (fire-and-forget)
     this._extractAndIndex(id, params.content, memory, params.insights);
 
@@ -2242,6 +2253,74 @@ ${item.description || item.title || ''}
   // -----------------------------------------------------------------------
 
   /**
+   * Pre-warm the embedding model (downloads on first run, ~23MB) then backfill.
+   * Runs in background — daemon is fully usable during warmup via FTS5 fallback.
+   */
+  async _warmupEmbedder() {
+    if (!this._embedder) return;
+    try {
+      const available = await this._embedder.isEmbeddingAvailable();
+      if (!available) {
+        console.warn('[awareness-local] Embedding library not available — FTS5-only mode');
+        return;
+      }
+      console.log('[awareness-local] Pre-warming embedding model (first run downloads ~23MB)...');
+      await this._embedder.embed('warmup', 'query');
+      console.log('[awareness-local] Embedding model ready — hybrid search active');
+    } catch (err) {
+      console.warn('[awareness-local] Embedding warmup failed:', err.message);
+      return; // skip backfill if model can't load
+    }
+    // Model is warm — now backfill old memories
+    await this._backfillEmbeddings();
+  }
+
+  /**
+   * Backfill embeddings for memories that were indexed before vector search was enabled.
+   * Runs in background on startup — processes in batches to avoid blocking.
+   */
+  async _backfillEmbeddings() {
+    if (!this._embedder) return;
+    // memories table has no content column — get IDs missing embeddings, read content from files
+    const missing = this.indexer.db
+      .prepare('SELECT id, filepath FROM memories WHERE id NOT IN (SELECT memory_id FROM embeddings)')
+      .all();
+    if (missing.length === 0) return;
+    console.log(`[awareness-local] backfilling embeddings for ${missing.length} memories...`);
+    let done = 0;
+    for (const mem of missing) {
+      try {
+        const result = await this.memoryStore.read(mem.id);
+        if (result?.content) {
+          await this._embedAndStore(mem.id, result.content);
+          done++;
+        }
+      } catch {
+        // File may be missing or corrupt — skip silently
+      }
+    }
+    console.log(`[awareness-local] embedding backfill complete: ${done}/${missing.length} memories embedded`);
+  }
+
+  /**
+   * Generate embedding for a memory and store it in the index.
+   * Fire-and-forget — errors are logged but don't block the record flow.
+   */
+  async _embedAndStore(memoryId, content) {
+    if (!this._embedder || !content) return;
+    try {
+      const vector = await this._embedder.embed(content, 'passage');
+      if (vector) {
+        const modelId = this._embedder.MODEL_MAP?.english || 'all-MiniLM-L6-v2';
+        this.indexer.storeEmbedding(memoryId, vector, modelId);
+      }
+    } catch (err) {
+      // Embedding generation failed — FTS5 still indexed, no data loss
+      console.warn('[awareness-local] embedding failed for', memoryId, ':', err.message);
+    }
+  }
+
+  /**
    * Extract knowledge from a newly recorded memory and index the results.
    * Fire-and-forget — errors are logged but don't fail the record.
    */
@@ -2329,6 +2408,27 @@ ${item.description || item.title || ''}
   // Dynamic module loading
   // -----------------------------------------------------------------------
 
+  /**
+   * Lazy-load the embedder module (shared by SearchEngine + KnowledgeExtractor).
+   * Caches at this._embedder. Returns null when unavailable (graceful degradation).
+   */
+  async _loadEmbedder() {
+    if (this._embedder !== undefined) return this._embedder;
+    try {
+      const thisDir = path.dirname(fileURLToPath(import.meta.url));
+      const embedderPath = path.join(thisDir, 'core', 'embedder.mjs');
+      if (fs.existsSync(embedderPath)) {
+        this._embedder = await import(pathToFileURL(embedderPath).href);
+        console.log('[awareness-local] Embedder loaded — hybrid vector+FTS5 search enabled');
+        return this._embedder;
+      }
+    } catch (err) {
+      console.warn('[awareness-local] Embedder unavailable, FTS5-only mode:', err.message);
+    }
+    this._embedder = null;
+    return null;
+  }
+
   /** Try to load SearchEngine from Phase 1 core. Returns null if not available. */
   async _loadSearchEngine() {
     try {
@@ -2338,7 +2438,8 @@ ${item.description || item.title || ''}
         const mod = await import(pathToFileURL(modPath).href);
         const SearchEngine = mod.SearchEngine || mod.default;
         if (SearchEngine) {
-          return new SearchEngine(this.indexer, this.memoryStore);
+          const embedder = await this._loadEmbedder();
+          return new SearchEngine(this.indexer, this.memoryStore, embedder);
         }
       }
     } catch (err) {
@@ -2356,19 +2457,8 @@ ${item.description || item.title || ''}
         const mod = await import(pathToFileURL(modPath).href);
         const KnowledgeExtractor = mod.KnowledgeExtractor || mod.default;
         if (KnowledgeExtractor) {
-          // Try to load embedder for vector-based conflict detection
-          let embedderModule = null;
-          try {
-            const embedderPath = path.join(thisDir, 'core', 'embedder.mjs');
-            if (fs.existsSync(embedderPath)) {
-              embedderModule = await import(pathToFileURL(embedderPath).href);
-            }
-          } catch {
-            // Embedder optional — conflict detection falls back to BM25 only
-          }
-          // Store embedder reference for prompt-aware init search
-          if (embedderModule) this._embedder = embedderModule;
-          return new KnowledgeExtractor(this.memoryStore, this.indexer, embedderModule);
+          const embedder = await this._loadEmbedder();
+          return new KnowledgeExtractor(this.memoryStore, this.indexer, embedder);
         }
       }
     } catch (err) {

@@ -1,6 +1,6 @@
 {
   "name": "@awareness-sdk/local",
-  "version": "0.3.15",
+  "version": "0.4.0",
   "description": "Local-first AI agent memory system. No account needed.",
   "license": "Apache-2.0",
   "type": "module",
@@ -17,10 +17,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.0",
+    "@huggingface/transformers": "^3.0.0",
     "better-sqlite3": "^12.8.0"
-  },
-  "optionalDependencies": {
-    "@huggingface/transformers": "^3.0.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0"
