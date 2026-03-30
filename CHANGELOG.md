@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.2] - 2026-03-30
+
+### Added
+- **healthz embedding diagnostics**: `/healthz` endpoint now includes `embedding` object with `available` boolean and `model` name, making it easier for desktop apps to display embedding status.
+
+### Improved
+- **Embedding warmup diagnostics**: When embedding model warmup fails, daemon now logs specific causes (network timeout, disk full, corrupted cache) and suggests fix commands (`rm -rf ~/.cache/huggingface/hub`). Previously only showed generic error message.
+- **Warmup timing**: Logs exact warmup duration in seconds for performance monitoring.
+
 ## [0.4.0] - 2026-03-29
 
 ### Added

@@ -18,6 +18,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
+
+// Read version from package.json (not hardcoded)
+const __daemon_dirname = path.dirname(fileURLToPath(import.meta.url));
+let PKG_VERSION = '0.4.0';
+try {
+  const require = createRequire(import.meta.url);
+  const pkg = require(path.join(__daemon_dirname, '..', 'package.json'));
+  PKG_VERSION = pkg.version || PKG_VERSION;
+} catch { /* fallback */ }
 
 // Force UTF-8 encoding on Windows (prevents Chinese/CJK text from becoming ????)
 if (process.platform === 'win32') {
@@ -581,7 +591,7 @@ export class AwarenessLocalDaemon {
     jsonResponse(res, {
       status: 'ok',
       mode: 'local',
-      version: '0.1.0',
+      version: PKG_VERSION,
       uptime: this._startedAt
         ? Math.floor((Date.now() - this._startedAt) / 1000)
         : 0,
@@ -589,6 +599,10 @@ export class AwarenessLocalDaemon {
       port: this.port,
       project_dir: this.projectDir,
       search_mode: this._embedder ? 'hybrid' : 'fts5-only',
+      embedding: {
+        available: !!this._embedder,
+        model: this._embedder?.MODEL_MAP?.english || null,
+      },
       stats,
     });
   }
@@ -608,7 +622,7 @@ export class AwarenessLocalDaemon {
       if (req.method === 'GET') {
         jsonResponse(res, {
           name: 'awareness-local',
-          version: '0.1.0',
+          version: PKG_VERSION,
           protocol: 'mcp',
           capabilities: {
             tools: ['awareness_init', 'awareness_recall', 'awareness_record',
@@ -2243,6 +2257,64 @@ ${item.description || item.title || ''}
         return { events: memories, total: memories.length, mode: 'local' };
       }
 
+      case 'perception': {
+        // Read perception signals from cache file + derive from recent knowledge
+        const signals = [];
+        const fs = await import('fs');
+        const path = await import('path');
+        const os = await import('os');
+
+        // 1. Read cached perception signals (written by awareness plugin hooks)
+        try {
+          const cachePath = path.join(os.homedir(), '.awareness', 'perception-cache.json');
+          if (fs.existsSync(cachePath)) {
+            const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+            if (Array.isArray(cached)) {
+              signals.push(...cached);
+            } else if (cached.signals) {
+              signals.push(...cached.signals);
+            }
+          }
+        } catch { /* no cache file */ }
+
+        // 2. Derive staleness signals from old knowledge cards
+        try {
+          const staleCards = this.indexer.db
+            .prepare(
+              "SELECT title, category, created_at FROM knowledge_cards WHERE status = 'active' AND created_at < datetime('now', '-14 days') ORDER BY created_at ASC LIMIT 5"
+            )
+            .all();
+          for (const card of staleCards) {
+            signals.push({
+              type: 'staleness',
+              message: `知识卡 "${card.title}" 已超过 14 天未更新`,
+              card_title: card.title,
+              category: card.category,
+              created_at: card.created_at,
+            });
+          }
+        } catch { /* db might not have the table */ }
+
+        // 3. Derive pattern signals from repeated categories
+        try {
+          const patterns = this.indexer.db
+            .prepare(
+              "SELECT category, COUNT(*) as count FROM knowledge_cards WHERE status = 'active' AND created_at > datetime('now', '-7 days') GROUP BY category HAVING count >= 3 ORDER BY count DESC LIMIT 3"
+            )
+            .all();
+          for (const p of patterns) {
+            signals.push({
+              type: 'pattern',
+              message: `最近 7 天有 ${p.count} 条 "${p.category}" 类型的记录`,
+              category: p.category,
+              count: p.count,
+            });
+          }
+        } catch { /* db issue */ }
+
+        return { signals, total: signals.length, mode: 'local' };
+      }
+
       default:
         return { error: `Unknown lookup type: ${type}`, mode: 'local' };
     }
@@ -2261,14 +2333,20 @@ ${item.description || item.title || ''}
     try {
       const available = await this._embedder.isEmbeddingAvailable();
       if (!available) {
-        console.warn('[awareness-local] Embedding library not available — FTS5-only mode');
+        console.warn('[awareness-local] @huggingface/transformers not installed — FTS5-only mode.');
+        console.warn('[awareness-local] To enable vector search: npm install @huggingface/transformers');
         return;
       }
-      console.log('[awareness-local] Pre-warming embedding model (first run downloads ~23MB)...');
+      const modelId = this._embedder.MODEL_MAP?.english || 'unknown';
+      console.log(`[awareness-local] Pre-warming embedding model "${modelId}" (first run downloads ~23MB)...`);
+      const t0 = Date.now();
       await this._embedder.embed('warmup', 'query');
-      console.log('[awareness-local] Embedding model ready — hybrid search active');
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+      console.log(`[awareness-local] Embedding model ready in ${elapsed}s — hybrid search active`);
     } catch (err) {
-      console.warn('[awareness-local] Embedding warmup failed:', err.message);
+      console.warn(`[awareness-local] Embedding warmup failed: ${err.message}`);
+      console.warn('[awareness-local] Common causes: network timeout, disk full, or corrupted cache.');
+      console.warn('[awareness-local] Try: rm -rf ~/.cache/huggingface/hub && restart daemon');
       return; // skip backfill if model can't load
     }
     // Model is warm — now backfill old memories

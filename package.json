@@ -1,6 +1,6 @@
 {
   "name": "@awareness-sdk/local",
-  "version": "0.4.0",
+  "version": "0.4.2",
   "description": "Local-first AI agent memory system. No account needed.",
   "license": "Apache-2.0",
   "type": "module",

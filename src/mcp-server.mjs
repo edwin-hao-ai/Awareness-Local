@@ -439,11 +439,12 @@ export class LocalMcpServer {
       {
         type: z.enum([
           'context', 'tasks', 'knowledge', 'risks',
-          'session_history', 'timeline',
+          'session_history', 'timeline', 'perception',
         ]).describe(
           'Data type to look up. ' +
           'context = full dump, tasks = open tasks, knowledge = cards, ' +
-          'risks = risk items, session_history = past sessions, timeline = events'
+          'risks = risk items, session_history = past sessions, timeline = events, ' +
+          'perception = signals (contradictions, patterns, staleness)'
         ),
         limit: z.number().optional().default(10).describe('Max items'),
         status: z.string().optional().describe('Status filter'),
