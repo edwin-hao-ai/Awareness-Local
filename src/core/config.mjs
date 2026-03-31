@@ -248,6 +248,100 @@ export function saveCloudConfig(projectDir, { apiKey, memoryId, apiBase }) {
 }
 
 // ---------------------------------------------------------------------------
+// Workspace Registry (~/.awareness/workspaces.json)
+// ---------------------------------------------------------------------------
+
+const WORKSPACES_FILE = path.join(os.homedir(), '.awareness', 'workspaces.json');
+const BASE_PORT = 37800;
+
+/**
+ * Load the workspace registry. Returns {} if file doesn't exist.
+ * @returns {Record<string, { memoryId: string, port: number, name: string, lastUsed?: string }>}
+ */
+export function loadWorkspaces() {
+  try {
+    if (fs.existsSync(WORKSPACES_FILE)) {
+      return JSON.parse(fs.readFileSync(WORKSPACES_FILE, 'utf-8'));
+    }
+  } catch { /* corrupted — return empty */ }
+  return {};
+}
+
+/**
+ * Save the workspace registry atomically.
+ * @param {Record<string, object>} workspaces
+ */
+export function saveWorkspaces(workspaces) {
+  const dir = path.dirname(WORKSPACES_FILE);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = WORKSPACES_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(workspaces, null, 2), 'utf-8');
+  fs.renameSync(tmp, WORKSPACES_FILE);
+}
+
+/**
+ * Register a project in the workspace registry.
+ * If already registered, updates lastUsed and returns existing entry.
+ * If new, auto-allocates a port and registers.
+ *
+ * @param {string} projectDir - Absolute path to project root
+ * @param {{ memoryId?: string, name?: string, port?: number }} [opts]
+ * @returns {{ memoryId: string, port: number, name: string }}
+ */
+export function registerWorkspace(projectDir, opts = {}) {
+  const workspaces = loadWorkspaces();
+  const key = path.resolve(projectDir);
+
+  if (workspaces[key]) {
+    // Update lastUsed and any new fields
+    workspaces[key].lastUsed = new Date().toISOString();
+    if (opts.memoryId) workspaces[key].memoryId = opts.memoryId;
+    if (opts.name) workspaces[key].name = opts.name;
+    if (opts.port) workspaces[key].port = opts.port;
+    saveWorkspaces(workspaces);
+    return workspaces[key];
+  }
+
+  // New workspace — allocate port
+  const usedPorts = new Set(Object.values(workspaces).map(w => w.port));
+  let port = opts.port || BASE_PORT;
+  while (usedPorts.has(port)) {
+    port++;
+  }
+
+  const entry = {
+    memoryId: opts.memoryId || '',
+    port,
+    name: opts.name || path.basename(key),
+    lastUsed: new Date().toISOString(),
+  };
+
+  workspaces[key] = entry;
+  saveWorkspaces(workspaces);
+  return entry;
+}
+
+/**
+ * Look up workspace entry for a project directory.
+ * @param {string} projectDir
+ * @returns {{ memoryId: string, port: number, name: string } | null}
+ */
+export function lookupWorkspace(projectDir) {
+  const workspaces = loadWorkspaces();
+  return workspaces[path.resolve(projectDir)] || null;
+}
+
+/**
+ * Remove a workspace from the registry.
+ * @param {string} projectDir
+ */
+export function unregisterWorkspace(projectDir) {
+  const workspaces = loadWorkspaces();
+  delete workspaces[path.resolve(projectDir)];
+  saveWorkspaces(workspaces);
+}
+
+// ---------------------------------------------------------------------------
 // Helpers (internal)
 // ---------------------------------------------------------------------------
 

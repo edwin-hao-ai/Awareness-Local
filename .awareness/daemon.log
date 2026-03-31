@@ -1,0 +1,7 @@
+[awareness-local] indexed 0 files, skipped 0
+[awareness-local] daemon running at http://localhost:37800
+[awareness-local] MCP endpoint: http://localhost:37800/mcp
+
+[awareness-local] shutting down...
+[awareness-local] daemon stopped
+libc++abi: terminating due to uncaught exception of type std::__1::system_error: mutex lock failed: Invalid argument

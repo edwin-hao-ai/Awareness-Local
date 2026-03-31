@@ -16,6 +16,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 
@@ -88,11 +89,21 @@ function resolveProjectDir(flags) {
  * @param {Record<string, string|boolean>} flags
  * @returns {number}
  */
-function resolvePort(flags) {
+function resolvePort(flags, projectDir) {
+  // Explicit --port flag takes priority
   if (typeof flags.port === 'string') {
     const p = parseInt(flags.port, 10);
     if (!isNaN(p) && p > 0 && p < 65536) return p;
   }
+  // Check workspace registry for previously assigned port
+  try {
+    const wsFile = path.join(os.homedir(), '.awareness', 'workspaces.json');
+    if (fs.existsSync(wsFile)) {
+      const workspaces = JSON.parse(fs.readFileSync(wsFile, 'utf-8'));
+      const key = path.resolve(projectDir || process.cwd());
+      if (workspaces[key] && workspaces[key].port) return workspaces[key].port;
+    }
+  } catch { /* registry not available */ }
   return 37800;
 }
 
@@ -167,12 +178,18 @@ function processExists(pid) {
  */
 async function cmdStart(flags) {
   const projectDir = resolveProjectDir(flags);
-  const port = resolvePort(flags);
+  const port = resolvePort(flags, projectDir);
   const foreground = flags.foreground === true;
 
   // Ensure .awareness directory exists
   const awarenessDir = path.join(projectDir, AWARENESS_DIR);
   fs.mkdirSync(awarenessDir, { recursive: true });
+
+  // Register workspace (auto-allocates port if new)
+  try {
+    const { registerWorkspace } = await import('../src/core/config.mjs');
+    registerWorkspace(projectDir, { port });
+  } catch { /* best-effort */ }
 
   // Check if already running
   const pid = readPid(projectDir);

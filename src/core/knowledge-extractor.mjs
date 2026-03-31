@@ -686,11 +686,7 @@ export class KnowledgeExtractor {
     if (current) paragraphs.push(current);
 
     const summary = paragraphs[0] || '';
-    if (summary.length <= 200) return summary;
-
-    const cut = summary.slice(0, 200);
-    const lastSpace = cut.lastIndexOf(' ');
-    return (lastSpace > 100 ? cut.slice(0, lastSpace) : cut) + '...';
+    return summary;
   }
 
   /**

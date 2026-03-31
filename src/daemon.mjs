@@ -1818,7 +1818,7 @@ export class AwarenessLocalDaemon {
             signals.push({
               type: 'resonance',
               title: r.title,
-              summary: (r.summary || '').slice(0, 150),
+              summary: r.summary || '',
               category: r.category || '',
               card_id: r.id,
               days_ago: daysAgo,
@@ -1888,7 +1888,7 @@ export class AwarenessLocalDaemon {
           signals.push({
             type: 'contradiction',
             title: r.title,
-            summary: (r.summary || '').slice(0, 150),
+            summary: r.summary || '',
             card_id: r.id,
             message: `⚡ This may contradict a prior belief: "${r.title}"`,
           });
@@ -1923,7 +1923,7 @@ export class AwarenessLocalDaemon {
                 signals.push({
                   type: 'related_decision',
                   title: d.title,
-                  summary: (d.summary || '').slice(0, 150),
+                  summary: d.summary || '',
                   card_id: d.id,
                   message: `📌 Related prior decision: "${d.title}"`,
                 });
@@ -2266,7 +2266,7 @@ ${item.description || item.title || ''}
 
         // 1. Read cached perception signals (written by awareness plugin hooks)
         try {
-          const cachePath = path.join(os.homedir(), '.awareness', 'perception-cache.json');
+          const cachePath = path.join(this.awarenessDir, 'perception-cache.json');
           if (fs.existsSync(cachePath)) {
             const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
             if (Array.isArray(cached)) {

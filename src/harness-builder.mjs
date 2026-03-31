@@ -73,20 +73,83 @@ export function extractKeywords(text, max = 8) {
 }
 
 /**
+ * Estimate token count for a string.
+ * CJK chars ~1.5 chars/token, ASCII ~4 chars/token, mixed ~2.5.
+ * @param {string} s
+ * @returns {number}
+ */
+function estimateTokens(s) {
+  if (!s) return 0;
+  const cjk = (s.match(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/g) || []).length;
+  const rest = s.length - cjk;
+  return Math.ceil(cjk / 1.5 + rest / 4);
+}
+
+/**
+ * Build a section's items, respecting a token budget.
+ * Returns { lines: string[], tokens: number, count: number }.
+ * Items are added in order (assumed pre-sorted by relevance) until budget is spent.
+ * @param {object[]} items - Source items
+ * @param {function} renderFn - (item) => string (the XML line)
+ * @param {number} budget - Max tokens for this section
+ * @returns {{ lines: string[], tokens: number, count: number }}
+ */
+function buildSection(items, renderFn, budget) {
+  const lines = [];
+  let tokens = 0;
+  let count = 0;
+  for (const item of items) {
+    const line = renderFn(item);
+    const cost = estimateTokens(line);
+    if (tokens + cost > budget && count > 0) break; // always include at least 1
+    lines.push(line);
+    tokens += cost;
+    count++;
+  }
+  return { lines, tokens, count };
+}
+
+// Default token budget and per-section allocation ratios.
+// Sections with higher priority get their budget first; lower-priority sections
+// share whatever remains. Total default: 20000 tokens.
+const DEFAULT_TOKEN_BUDGET = 20000;
+const SECTION_CONFIG = [
+  // { key, priority (lower=higher), budgetRatio (share of total) }
+  { key: 'perception', priority: 1, budgetRatio: 0.05 },
+  { key: 'knowledge',  priority: 2, budgetRatio: 0.25 },
+  { key: 'recall',     priority: 3, budgetRatio: 0.30 },
+  { key: 'tasks',      priority: 4, budgetRatio: 0.10 },
+  { key: 'prefs',      priority: 5, budgetRatio: 0.08 },
+  { key: 'progress',   priority: 6, budgetRatio: 0.12 },
+  { key: 'sessions',   priority: 7, budgetRatio: 0.10 },
+];
+
+/**
  * Build the canonical <awareness-memory> XML block.
+ * Uses a token budget (default 20k) to dynamically control how many items
+ * from each section are included. Content is never truncated — only the
+ * number of items per section is adjusted to fit the budget.
+ *
  * @param {object} ctx - Init context (from awareness_init response)
  * @param {object[]} [recallResults] - Recall search results
  * @param {object[]} [perceptionSignals] - Cached perception signals
  * @param {object} [options] - Additional options
  * @param {string} [options.recordRuleScript] - Path to save-memory.js (CC only)
  * @param {string} [options.localUrl] - Local daemon URL for dashboard
+ * @param {number} [options.tokenBudget] - Max tokens for memory context (default 20000)
  * @returns {string}
  */
 export function buildContextXml(ctx, recallResults, perceptionSignals, options = {}) {
   const esc = escapeXml;
+  const totalBudget = options.tokenBudget || DEFAULT_TOKEN_BUDGET;
   const parts = ["<awareness-memory>"];
 
-  // --- Skills ---
+  // Fixed-cost sections (skills, attention, dashboard, record-rule) are small
+  // and always included. We reserve ~500 tokens for them.
+  const fixedReserve = 500;
+  const dynamicBudget = totalBudget - fixedReserve;
+
+  // --- Skills (always full, tiny) ---
   const skills = ctx.active_skills || [];
   if (skills.length > 0) {
     parts.push("  <skills>");
@@ -96,46 +159,96 @@ export function buildContextXml(ctx, recallResults, perceptionSignals, options =
     parts.push("  </skills>");
   }
 
-  // --- Who You Are (user preferences with <pref> tags) ---
-  const prefs = ctx.user_preferences || [];
-  if (prefs.length > 0) {
-    parts.push("  <who-you-are>");
-    for (const p of prefs.slice(0, 15)) {
+  // --- Prepare all section data + renderers ---
+  const sectionData = {
+    perception: perceptionSignals || [],
+    knowledge:  (ctx.context || ctx).knowledge_cards || [],
+    recall:     recallResults || [],
+    tasks:      (ctx.context || ctx).open_tasks || [],
+    prefs:      ctx.user_preferences || [],
+    progress:   ((ctx.context || ctx).recent_days || []).filter(d => d.narrative),
+    sessions:   (ctx.context || ctx).last_sessions || ctx.recent_sessions || [],
+  };
+
+  const renderers = {
+    perception: (s) =>
+      `    <signal type="${esc(s.type || "")}">${esc(s.message || "")}</signal>`,
+    knowledge: (c) => {
+      const rule = (c.actionable_rule || "").trim();
+      const content = rule ? esc(rule) : `${esc(c.title || "")}: ${esc(c.summary || "")}`;
+      return `    <card category="${esc(c.category || "")}">${content}</card>`;
+    },
+    recall: (r) => {
+      const score = r.score || 0;
+      const content = esc(r.content || "");
+      let daysAgo = 0;
+      if (r.created_at) {
+        try { daysAgo = Math.floor((Date.now() - new Date(r.created_at).getTime()) / 86400000); } catch {}
+      }
+      if (score > 0.8 && daysAgo > 3) {
+        return `    <aha score="${score.toFixed(2)}" days-ago="${daysAgo}">${content}</aha>`;
+      }
+      const scoreAttr = score ? ` score="${score.toFixed(2)}"` : "";
+      return `    <result${scoreAttr}>${content}</result>`;
+    },
+    tasks: (t) =>
+      `    <task priority="${esc(t.priority || "medium")}" status="${esc(t.status || "pending")}">${esc(t.title || "")}</task>`,
+    prefs: (p) => {
       const rule = (p.actionable_rule || "").trim();
       const content = rule ? esc(rule) : `${esc(p.title || "")}: ${esc(p.summary || "")}`;
-      parts.push(`    <pref category="${esc(p.category || "")}">${content}</pref>`);
-    }
+      return `    <pref category="${esc(p.category || "")}">${content}</pref>`;
+    },
+    progress: (day) =>
+      `    <day date="${esc(day.date || "")}">${esc(day.narrative || "")}</day>`,
+    sessions: (s) => {
+      const date = esc(s.date || "");
+      const events = s.event_count || s.memory_count || 0;
+      const summary = esc(s.summary || "");
+      return `    <session date="${date}" events="${events}">${summary}</session>`;
+    },
+  };
+
+  // --- Phase 1: build each section with its allocated budget ---
+  const sectionResults = {};
+  let usedTokens = 0;
+
+  for (const cfg of SECTION_CONFIG) {
+    const sectionBudget = Math.floor(dynamicBudget * cfg.budgetRatio);
+    sectionResults[cfg.key] = buildSection(sectionData[cfg.key], renderers[cfg.key], sectionBudget);
+    usedTokens += sectionResults[cfg.key].tokens;
+  }
+
+  // --- Phase 2: redistribute unused budget to high-priority sections that were cut ---
+  let remaining = dynamicBudget - usedTokens;
+  for (const cfg of SECTION_CONFIG) {
+    if (remaining <= 200) break;
+    const sr = sectionResults[cfg.key];
+    if (sr.count >= sectionData[cfg.key].length) continue; // not truncated
+    const rebuilt = buildSection(sectionData[cfg.key], renderers[cfg.key], sr.tokens + remaining);
+    remaining -= (rebuilt.tokens - sr.tokens);
+    sectionResults[cfg.key] = rebuilt;
+  }
+
+  // --- Render sections in display order ---
+  if (sectionResults.prefs.lines.length > 0) {
+    parts.push("  <who-you-are>");
+    parts.push(...sectionResults.prefs.lines);
     parts.push("  </who-you-are>");
   }
 
-  // --- Last Sessions ---
-  const sessions = (ctx.context || ctx).last_sessions || ctx.recent_sessions || [];
-  if (sessions.length > 0) {
+  if (sectionResults.sessions.lines.length > 0) {
     parts.push("  <last-sessions>");
-    for (const s of sessions.slice(0, 5)) {
-      const date = esc(s.date || "");
-      const events = s.event_count || s.memory_count || 0;
-      const summary = esc((s.summary || "").slice(0, 300));
-      parts.push(`    <session date="${date}" events="${events}">${summary}</session>`);
-    }
+    parts.push(...sectionResults.sessions.lines);
     parts.push("  </last-sessions>");
   }
 
-  // --- Recent Progress (daily narratives) ---
-  const days = (ctx.context || ctx).recent_days || [];
-  if (days.length > 0) {
+  if (sectionResults.progress.lines.length > 0) {
     parts.push("  <recent-progress>");
-    for (const day of days.slice(0, 7)) {
-      const date = esc(day.date || "");
-      const narrative = esc((day.narrative || "").slice(0, 500));
-      if (narrative) {
-        parts.push(`    <day date="${date}">${narrative}</day>`);
-      }
-    }
+    parts.push(...sectionResults.progress.lines);
     parts.push("  </recent-progress>");
   }
 
-  // --- Attention Protocol ---
+  // --- Attention Protocol (fixed cost, always included) ---
   const attn = (ctx.context || ctx).attention_summary || ctx.attention_summary || {};
   const stale = attn.stale_tasks || 0;
   const risks = attn.high_risks || 0;
@@ -150,61 +263,25 @@ export function buildContextXml(ctx, recallResults, perceptionSignals, options =
   }
   parts.push("  </attention-protocol>");
 
-  // --- Open Tasks ---
-  const tasks = (ctx.context || ctx).open_tasks || [];
-  if (tasks.length > 0) {
+  if (sectionResults.tasks.lines.length > 0) {
     parts.push("  <open-tasks>");
-    for (const t of tasks.slice(0, 20)) {
-      parts.push(`    <task priority="${esc(t.priority || "medium")}" status="${esc(t.status || "pending")}">${esc(t.title || "")}</task>`);
-    }
+    parts.push(...sectionResults.tasks.lines);
     parts.push("  </open-tasks>");
   }
 
-  // --- Knowledge Cards (actionable_rule preferred) ---
-  const cards = (ctx.context || ctx).knowledge_cards || [];
-  if (cards.length > 0) {
+  if (sectionResults.knowledge.lines.length > 0) {
     parts.push("  <knowledge>");
-    for (const c of cards.slice(0, 20)) {
-      const rule = (c.actionable_rule || "").trim();
-      let content;
-      if (rule) {
-        content = esc(rule);
-      } else {
-        content = `${esc(c.title || "")}: ${esc((c.summary || "").slice(0, 200))}`;
-      }
-      parts.push(`    <card category="${esc(c.category || "")}">${content}</card>`);
-    }
+    parts.push(...sectionResults.knowledge.lines);
     parts.push("  </knowledge>");
   }
 
-  // --- Recall Results (with aha detection) ---
-  if (recallResults && recallResults.length > 0) {
+  if (sectionResults.recall.lines.length > 0) {
     parts.push("  <recall>");
-    const now = Date.now();
-    for (const r of recallResults.slice(0, 10)) {
-      const score = r.score || 0;
-      const content = esc((r.content || "").slice(0, 300));
-      if (!content) continue;
-
-      let daysAgo = 0;
-      if (r.created_at) {
-        try {
-          daysAgo = Math.floor((now - new Date(r.created_at).getTime()) / 86400000);
-        } catch { /* ignore */ }
-      }
-
-      if (score > 0.8 && daysAgo > 3) {
-        parts.push(`    <aha score="${score.toFixed(2)}" days-ago="${daysAgo}">${content}</aha>`);
-      } else {
-        const scoreAttr = score ? ` score="${score.toFixed(2)}"` : "";
-        parts.push(`    <result${scoreAttr}>${content}</result>`);
-      }
-    }
+    parts.push(...sectionResults.recall.lines);
     parts.push("  </recall>");
   }
 
-  // --- Perception Signals ---
-  if (perceptionSignals && perceptionSignals.length > 0) {
+  if (sectionResults.perception.lines.length > 0) {
     parts.push("  <perception>");
     parts.push("    <action-required>BEFORE responding to the user, you MUST address each signal below. "
       + "For contradictions: inform the user and ask if intentional. "
@@ -212,9 +289,7 @@ export function buildContextXml(ctx, recallResults, perceptionSignals, options =
       + "For patterns: suggest a systematic fix. "
       + "For staleness: warn knowledge may be outdated. "
       + "For guards: STOP and warn about the known pitfall.</action-required>");
-    for (const s of perceptionSignals.slice(0, 5)) {
-      parts.push(`    <signal type="${esc(s.type || "")}">${esc(s.message || "")}</signal>`);
-    }
+    parts.push(...sectionResults.perception.lines);
     parts.push("  </perception>");
   }
 

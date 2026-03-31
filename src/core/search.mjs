@@ -404,9 +404,9 @@ export class SearchEngine {
    * @param {number}      maxChars
    * @returns {string}
    */
-  truncateToSummary(content, maxChars = 150) {
+  truncateToSummary(content, maxChars = 0) {
     if (!content) return '';
-    if (content.length <= maxChars) return content;
+    if (!maxChars || content.length <= maxChars) return content;
 
     // Cut at maxChars, then backtrack to last whitespace for word boundary
     const truncated = content.slice(0, maxChars);
