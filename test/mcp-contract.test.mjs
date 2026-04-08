@@ -103,6 +103,127 @@ test('buildInitResult keeps preference-first, active skills, and attention summa
   assert.match(initResult.rendered_context, /How should auth be implemented\?/);
 });
 
+// ---------------------------------------------------------------------------
+// _selectRelevantCards — query-aware card selection (via buildInitResult)
+// ---------------------------------------------------------------------------
+
+test('buildInitResult with query uses searchKnowledge when available', () => {
+  let searchKnowledgeCalled = false;
+  let searchKnowledgeQuery = null;
+
+  const searchableIndexer = {
+    getStats: () => ({ totalMemories: 0, totalKnowledge: 3, totalTasks: 0, totalSessions: 0 }),
+    getRecentKnowledge: (_limit) => [
+      { id: 'recent_1', category: 'decision', title: 'Recent decision', summary: 'Some old thing.' },
+    ],
+    searchKnowledge: (query, opts) => {
+      searchKnowledgeCalled = true;
+      searchKnowledgeQuery = query;
+      // Return cards that match the query semantically (simulated)
+      return [
+        { id: 'rel_1', category: 'problem_solution', title: 'Auth timeout fix', summary: 'Fix JWT expiry.' },
+        { id: 'rel_2', category: 'decision', title: 'Use RS256 keys', summary: 'Chose RS256 over HS256.' },
+        { id: 'rel_3', category: 'pitfall', title: 'Token leak risk', summary: 'Never log tokens.' },
+        { id: 'rel_4', category: 'key_point', title: 'Refresh interval', summary: 'Refresh every 15 min.' },
+        { id: 'rel_5', category: 'workflow', title: 'Login flow', summary: 'POST /auth/login.' },
+      ].slice(0, opts?.limit ?? 5);
+    },
+    getOpenTasks: () => [],
+    getRecentSessions: () => [],
+    db: { prepare: () => ({ get: () => ({ cnt: 0 }) }) },
+  };
+
+  const result = buildInitResult({
+    createSession: () => ({ id: 'ses_q1' }),
+    indexer: searchableIndexer,
+    loadSpec: () => ({ init_guides: {} }),
+    source: 'test',
+    maxCards: 5,
+    maxTasks: 0,
+    renderContextOptions: { currentFocus: 'how should auth token expiry be handled?' },
+  });
+
+  assert.ok(searchKnowledgeCalled, 'searchKnowledge should be called when currentFocus is set');
+  assert.ok(searchKnowledgeQuery?.includes('auth'), 'query should be forwarded to searchKnowledge');
+  // knowledge_cards returned should come from search, not from getRecentKnowledge
+  const allCardIds = [...result.knowledge_cards, ...result.user_preferences].map((c) => c.id);
+  assert.ok(allCardIds.some((id) => id.startsWith('rel_')), 'result cards should come from searchKnowledge');
+  assert.ok(!allCardIds.includes('recent_1'), 'pure-recency card should not appear when search fills quota');
+});
+
+test('buildInitResult with query supplements search results with recent cards when search returns fewer than maxCards', () => {
+  const sparseSearchIndexer = {
+    getStats: () => ({ totalMemories: 0, totalKnowledge: 5, totalTasks: 0, totalSessions: 0 }),
+    getRecentKnowledge: (_limit) => [
+      { id: 'rec_a', category: 'decision', title: 'Recent A', summary: 'Recent card A.' },
+      { id: 'rec_b', category: 'insight', title: 'Recent B', summary: 'Recent card B.' },
+      { id: 'rec_c', category: 'key_point', title: 'Recent C', summary: 'Recent card C.' },
+    ],
+    searchKnowledge: (_query, _opts) => [
+      // Only 1 result — fewer than maxCards=3
+      { id: 'found_1', category: 'problem_solution', title: 'Relevant hit', summary: 'Direct match.' },
+    ],
+    getOpenTasks: () => [],
+    getRecentSessions: () => [],
+    db: { prepare: () => ({ get: () => ({ cnt: 0 }) }) },
+  };
+
+  const result = buildInitResult({
+    createSession: () => ({ id: 'ses_q2' }),
+    indexer: sparseSearchIndexer,
+    loadSpec: () => ({ init_guides: {} }),
+    source: 'test',
+    maxCards: 3,
+    maxTasks: 0,
+    renderContextOptions: { currentFocus: 'relevant topic' },
+  });
+
+  const allCards = [...result.knowledge_cards, ...result.user_preferences];
+  assert.equal(allCards.length, 3, 'should return exactly maxCards=3 cards');
+  const ids = allCards.map((c) => c.id);
+  assert.ok(ids.includes('found_1'), 'search result should be included');
+  // At least one recent card should fill the gap
+  const recentHits = ids.filter((id) => id.startsWith('rec_'));
+  assert.ok(recentHits.length >= 1, 'recent cards should supplement sparse search results');
+  // No duplicate ids
+  assert.equal(new Set(ids).size, ids.length, 'no duplicate card ids');
+});
+
+test('buildInitResult without query falls back to getRecentKnowledge (no searchKnowledge called)', () => {
+  let searchKnowledgeCalled = false;
+  let getRecentKnowledgeCalled = false;
+
+  const indexerWithBoth = {
+    getStats: () => ({ totalMemories: 0, totalKnowledge: 3, totalTasks: 0, totalSessions: 0 }),
+    getRecentKnowledge: (limit) => {
+      getRecentKnowledgeCalled = true;
+      return [{ id: 'r1', category: 'decision', title: 'Old decision', summary: 'Foo.' }].slice(0, limit);
+    },
+    searchKnowledge: (_q, _o) => {
+      searchKnowledgeCalled = true;
+      return [];
+    },
+    getOpenTasks: () => [],
+    getRecentSessions: () => [],
+    db: { prepare: () => ({ get: () => ({ cnt: 0 }) }) },
+  };
+
+  buildInitResult({
+    createSession: () => ({ id: 'ses_q3' }),
+    indexer: indexerWithBoth,
+    loadSpec: () => ({ init_guides: {} }),
+    source: 'test',
+    maxCards: 2,
+    maxTasks: 0,
+    renderContextOptions: {}, // no currentFocus
+  });
+
+  // searchKnowledge is called for allActiveCards(200) path — but NOT for recentCards selection
+  // The key assertion: the recentCards path must have used getRecentKnowledge, not searchKnowledge
+  assert.ok(getRecentKnowledgeCalled, 'getRecentKnowledge should be called when no query');
+  assert.ok(!searchKnowledgeCalled, 'searchKnowledge should NOT be called for card selection without a query');
+});
+
 test('SearchEngine.searchCloud forwards cloud-aligned recall flags', async () => {
   const originalFetch = global.fetch;
 

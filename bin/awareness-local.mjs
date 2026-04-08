@@ -261,10 +261,13 @@ async function cmdStart(flags) {
       console.log(`  Dashboard:    http://localhost:${port}/`);
       console.log(`  Log file:     ${logPath}`);
 
-      // Auto-open dashboard on first daemon start
-      const firstRunFlag = path.join(awarenessDir, '.first-run-done');
+      // Auto-open dashboard only on the very first daemon start across all projects.
+      // Use a global flag in ~/.awareness so new workspaces don't keep re-opening the browser.
+      const globalAwarenessDir = path.join(os.homedir(), '.awareness');
+      const firstRunFlag = path.join(globalAwarenessDir, '.dashboard-opened');
       if (!fs.existsSync(firstRunFlag)) {
         try {
+          fs.mkdirSync(globalAwarenessDir, { recursive: true });
           fs.writeFileSync(firstRunFlag, new Date().toISOString());
           const url = `http://localhost:${port}/`;
           const { exec } = await import('node:child_process');

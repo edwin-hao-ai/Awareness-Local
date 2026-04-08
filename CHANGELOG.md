@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.5.13] - 2026-04-08
+
+### Fixed
+- **Dashboard auto-open no longer spams browser windows**: The local daemon now uses a global `~/.awareness/.dashboard-opened` first-run flag instead of a per-project one, so new workspaces don't keep re-opening `http://localhost:37800/`. Auto-open is also removed from `@awareness-sdk/setup`, leaving the daemon as the single source of truth for this behavior.
+
+## [0.5.12] - 2026-04-07
+
+### Fixed
+- **Context confusion in recall**: Short, ambiguous prompts (e.g. "make it responsive") no longer pull in unrelated knowledge cards from different conversation contexts. The recall system now enriches the semantic query with topic keywords from the last hour of memories, giving contextual grounding to any client without requiring workspace metadata.
+- **Source tracking on knowledge cards**: Cards now carry the originating client source (mcp/openclaw-plugin/desktop). During recall, cards from the same client as the caller receive a 1.3× relevance boost, reducing cross-client pollution between Claude Code and OpenClaw sessions.
+- **Structural quality gate for knowledge cards**: Cards whose body (after stripping code fences) has fewer than 5 unique prose tokens are rejected at write time. Prevents raw system metadata (e.g. sender JSON payloads) from being stored as knowledge without hardcoding any specific strings.
+
+## [0.5.10] - 2026-04-06
+
+### Fixed
+- **Cloud sync memory name display**: After connecting to cloud sync and selecting a memory, the UI now shows the memory name instead of just the memory ID. Name is saved to config on connect and displayed in the Sync panel status.
+
+## [0.5.9] - 2026-04-06
+
+### Fixed
+- **Auto-rebuild better-sqlite3**: When Node.js major version upgrades (e.g. v23→v24), the native C++ addon becomes incompatible. Daemon now auto-detects NODE_MODULE_VERSION mismatch and runs `npm rebuild` before falling back to no-op mode. Prevents memory appearing empty after a Node.js upgrade.
+
+## [0.5.8] - 2026-04-05
+
+### Changed
+- **Zero-truncation recall**: Summary mode now returns full content instead of snippets. Token budget controlled by reducing item count, not cutting content. Prevents context pollution when conclusions appear at the end of long content.
+
+## [0.5.7] - 2026-04-05
+
+### Changed
+- **Recall snippet length**: Increased default from 250→600 chars, summary search from 400→800 chars. Short content now fully returned without truncation.
+- **Perception guard detail**: Increased pitfall/risk summary from 150→300 chars for readable warnings.
+
 ## [0.5.6] - 2026-04-05
 
 ### Fixed

@@ -162,9 +162,24 @@ export class AwarenessLocalDaemon {
         path.join(this.awarenessDir, 'index.db')
       );
     } catch (e) {
-      console.error(`[awareness-local] SQLite indexer unavailable: ${e.message}`);
-      console.error('[awareness-local] Falling back to file-only mode (no search). Install better-sqlite3: npm install better-sqlite3');
-      this.indexer = createNoopIndexer();
+      // Auto-rebuild better-sqlite3 when Node.js major version has changed
+      if (e.message && e.message.includes('NODE_MODULE_VERSION')) {
+        const rebuilt = await this._tryRebuildBetterSqlite(e.message);
+        if (rebuilt) {
+          try {
+            this.indexer = new Indexer(path.join(this.awarenessDir, 'index.db'));
+          } catch (e2) {
+            console.error(`[awareness-local] SQLite still unavailable after rebuild: ${e2.message}`);
+            this.indexer = createNoopIndexer();
+          }
+        } else {
+          this.indexer = createNoopIndexer();
+        }
+      } else {
+        console.error(`[awareness-local] SQLite indexer unavailable: ${e.message}`);
+        console.error('[awareness-local] Falling back to file-only mode (no search). Install better-sqlite3: npm install better-sqlite3');
+        this.indexer = createNoopIndexer();
+      }
     }
 
     // Search and extractor are optional Phase 1 modules — import dynamically
@@ -1305,6 +1320,31 @@ ${item.description || item.title || ''}
       awarenessDir: this.awarenessDir,
       port: this.port,
     });
+  }
+
+  /**
+   * Attempt to auto-rebuild better-sqlite3 when a NODE_MODULE_VERSION mismatch
+   * is detected (e.g. after a Node.js major version upgrade).
+   * Extracts the module directory from the error message and runs `npm rebuild`.
+   *
+   * @param {string} errMsg - The error message from the failed require()
+   * @returns {Promise<boolean>} true if rebuild succeeded
+   */
+  async _tryRebuildBetterSqlite(errMsg) {
+    try {
+      const match = errMsg.match(/The module '(.+?better-sqlite3.+?\.node)'/);
+      if (!match) return false;
+      const moduleDir = match[1].split('/build/')[0];
+      const { execSync } = await import('node:child_process');
+      console.log(`[awareness-local] Node.js version changed — auto-rebuilding better-sqlite3 for ${process.version}...`);
+      execSync('npm rebuild', { cwd: moduleDir, stdio: 'pipe' });
+      console.log('[awareness-local] better-sqlite3 rebuilt successfully');
+      return true;
+    } catch (rebuildErr) {
+      console.error(`[awareness-local] Auto-rebuild failed: ${rebuildErr.message}`);
+      console.error('[awareness-local] Falling back to file-only mode (no search)');
+      return false;
+    }
   }
 
   /** Load awareness-spec.json from the bundled spec directory. */

@@ -757,7 +757,9 @@ async function loadSync() {
     iconEl.className = 'sync-icon connected';
     iconEl.innerHTML = '&#9889;';
     titleEl.textContent = 'Connected to Cloud';
-    descEl.textContent = 'Memory ID: ' + (data.memory_id || 'N/A');
+    var memoryLabel = data.memory_name || data.memory_id || 'N/A';
+    descEl.textContent = 'Memory: ' + memoryLabel;
+    if (data.memory_name && data.memory_id) descEl.textContent += ' (' + data.memory_id + ')';
     if (data.last_push_at) descEl.textContent += ' | Last sync: ' + formatDate(data.last_push_at);
     btnEl.textContent = 'Disconnect';
   } else {
@@ -865,11 +867,13 @@ async function startDeviceAuth() {
 }
 
 async function confirmMemorySelection() {
-  var memoryId = document.getElementById('memory-select').value;
+  var select = document.getElementById('memory-select');
+  var memoryId = select.value;
+  var memoryName = select.options[select.selectedIndex] ? select.options[select.selectedIndex].textContent : memoryId;
   try {
     await api('/cloud/connect', {
       method: 'POST',
-      body: JSON.stringify({ api_key: _authApiKey, memory_id: memoryId })
+      body: JSON.stringify({ api_key: _authApiKey, memory_id: memoryId, memory_name: memoryName })
     });
     document.getElementById('auth-select-memory').style.display = 'none';
     document.getElementById('auth-success').style.display = 'block';

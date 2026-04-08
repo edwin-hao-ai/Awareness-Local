@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS knowledge_cards (
   confidence REAL DEFAULT 0.8,
   status TEXT DEFAULT 'active',
   tags TEXT,
+  source TEXT,
   parent_card_id TEXT,
   evolution_type TEXT DEFAULT 'initial',
   created_at TEXT NOT NULL,
@@ -247,6 +248,9 @@ export class Indexer {
       if (!colNames.has('evolution_type')) {
         this.db.exec(`ALTER TABLE knowledge_cards ADD COLUMN evolution_type TEXT DEFAULT 'initial'`);
       }
+      if (!colNames.has('source')) {
+        this.db.exec(`ALTER TABLE knowledge_cards ADD COLUMN source TEXT`);
+      }
     } catch {
       // Table doesn't exist yet — SCHEMA_SQL will create it with both columns
     }
@@ -361,10 +365,10 @@ export class Indexer {
     // -- knowledge_cards --------------------------------------------------
     this._stmtUpsertKnowledge = this.db.prepare(`
       INSERT INTO knowledge_cards (id, category, title, summary, source_memories,
-                                   confidence, status, tags, parent_card_id,
+                                   confidence, status, tags, source, parent_card_id,
                                    evolution_type, created_at, filepath)
       VALUES (@id, @category, @title, @summary, @source_memories,
-              @confidence, @status, @tags, @parent_card_id,
+              @confidence, @status, @tags, @source, @parent_card_id,
               @evolution_type, @created_at, @filepath)
       ON CONFLICT(id) DO UPDATE SET
         category        = excluded.category,
@@ -374,6 +378,7 @@ export class Indexer {
         confidence      = excluded.confidence,
         status          = excluded.status,
         tags            = excluded.tags,
+        source          = excluded.source,
         parent_card_id  = excluded.parent_card_id,
         evolution_type  = excluded.evolution_type,
         filepath        = excluded.filepath
@@ -530,6 +535,7 @@ export class Indexer {
       confidence: card.confidence ?? 0.8,
       status: card.status || 'active',
       tags,
+      source: card.source || null,
       parent_card_id: card.parent_card_id || null,
       evolution_type: card.evolution_type || 'initial',
       created_at: card.created_at || now,
@@ -836,6 +842,25 @@ export class Indexer {
         .prepare(`SELECT COUNT(*) AS c FROM sessions`)
         .get().c,
     };
+  }
+
+  /**
+   * Return the most recently stored memories within a time window.
+   * Used for session-context enrichment in recall queries.
+   *
+   * @param {number} [windowMs=3_600_000] — look-back window in ms (default: 1 hour)
+   * @param {number} [limit=8]
+   * @returns {Array<{ id: string, title: string, tags: string }>}
+   */
+  getRecentMemories(windowMs = 3_600_000, limit = 8) {
+    const cutoff = new Date(Date.now() - windowMs).toISOString();
+    return this.db
+      .prepare(
+        `SELECT id, title, tags FROM memories
+         WHERE created_at > ? AND status = 'active'
+         ORDER BY created_at DESC LIMIT ?`
+      )
+      .all(cutoff, limit);
   }
 
   /**

@@ -306,6 +306,7 @@ export function apiSyncStatus(daemon, _req, res) {
     cloud_enabled: !!cloud.enabled,
     api_base: cloud.api_base || null,
     memory_id: cloud.memory_id || null,
+    memory_name: cloud.memory_name || null,
     auto_sync: cloud.auto_sync ?? true,
     last_push_at: cloud.last_push_at || null,
     last_pull_at: cloud.last_pull_at || null,
@@ -452,7 +453,7 @@ export async function apiCloudConnect(daemon, req, res) {
   let params;
   try { params = JSON.parse(body); } catch { return jsonResponse(res, { error: 'Invalid JSON' }, 400); }
 
-  const { api_key, memory_id } = params;
+  const { api_key, memory_id, memory_name } = params;
   if (!api_key) return jsonResponse(res, { error: 'api_key required' }, 400);
 
   const configPath = path.join(daemon.awarenessDir, 'config.json');
@@ -462,6 +463,7 @@ export async function apiCloudConnect(daemon, req, res) {
     enabled: true,
     api_key,
     memory_id: memory_id || '',
+    memory_name: memory_name || '',
     auto_sync: true,
   };
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');

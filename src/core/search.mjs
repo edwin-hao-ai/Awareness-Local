@@ -141,6 +141,7 @@ export class SearchEngine {
       multi_level = false,
       cluster_expand = false,
       include_installed = true,
+      current_source,   // caller's source identifier (e.g. 'claude-code', 'openclaw-plugin')
     } = params;
 
     // Progressive disclosure Phase 2: return full content for specified IDs
@@ -156,9 +157,22 @@ export class SearchEngine {
       ? this._expandCjkToEnglish(keyword_query || semantic_query || '')
       : keyword_query;
 
+    // Session-context enrichment: extract topic keywords from memories written in the
+    // last hour and append them to the semantic query.  This prevents short, ambiguous
+    // prompts (e.g. "make it responsive") from pulling in unrelated cards that happen
+    // to share a common term.  Works for any client — no workspace metadata needed.
+    let enrichedSemantic = semantic_query;
+    try {
+      if (semantic_query && this.indexer?.getRecentMemories) {
+        const recentMems = this.indexer.getRecentMemories(3_600_000, 8);
+        const hint = this._buildSessionContextHint(recentMems);
+        if (hint) enrichedSemantic = `${semantic_query} ${hint}`;
+      }
+    } catch { /* non-fatal — degrade gracefully */ }
+
     // Phase 1: search and return lightweight summaries
     const normalizedParams = this.queryPlanner.plan({
-      semantic_query,
+      semantic_query: enrichedSemantic,
       keyword_query: expandedKeyword || keyword_query,
       scope,
       recall_mode,
@@ -200,16 +214,32 @@ export class SearchEngine {
     // Filter out low-signal types by default
     merged = merged.filter((r) => !DEFAULT_TYPE_EXCLUDE.has(r.type));
 
+    // Source boost: knowledge cards created by the same client as the caller
+    // score 30% higher.  Cards from unknown sources are not penalised.
+    // Uses the DB `source` field (mcp/openclaw-plugin/desktop/…) stored on each
+    // card at write time; distinct from the retrieval-path `source` ('local'/'cloud').
+    if (current_source) {
+      merged = merged.map((r) => {
+        const cardSource = r.record_source || r.source_origin || r.db_source;
+        if (cardSource && cardSource === current_source) {
+          return { ...r, finalScore: (r.finalScore ?? r.mergedScore ?? 0) * 1.3 };
+        }
+        return r;
+      });
+      merged.sort((a, b) =>
+        (b.finalScore ?? b.mergedScore ?? 0) - (a.finalScore ?? a.mergedScore ?? 0)
+      );
+    }
+
     // Hydrate results missing metadata (embedding-only results lack title/content)
     this._hydrateMetadata(merged);
 
-    // Return summary format with keyword-context snippets
-    const queryText = semantic_query || keyword_query || '';
+    // Return summary format — full content, no truncation; control token budget via item count
     const summaryResults = merged.map((r) => ({
       id: r.id,
       type: r.type || r.category || 'memory',
       title: r.title || this._autoTitle(r.fts_content || r.content),
-      summary: r.summary || this.buildSnippet(r.fts_content || r.content, queryText, 400),
+      summary: r.summary || r.fts_content || r.content || '',
       score: r.mergedScore ?? r.finalScore ?? 0,
       tokens_est: Math.ceil((r.fts_content?.length || r.content?.length || 0) / 4),
       tags: this._parseTags(r.tags),
@@ -413,7 +443,8 @@ export class SearchEngine {
     for (const r of localResults) {
       merged.set(r.id, {
         ...r,
-        source: 'local',
+        record_source: r.source || null,  // preserve DB source (mcp/openclaw-plugin/…)
+        source: 'local',                  // overwrite with retrieval-path indicator
         localScore: r.finalScore || 0,
         cloudScore: null,
         mergedScore: r.finalScore || 0,
@@ -610,7 +641,7 @@ export class SearchEngine {
    * @param {number}      maxChars
    * @returns {string}
    */
-  buildSnippet(content, query, maxChars = 250) {
+  buildSnippet(content, query, maxChars = 600) {
     if (!content) return '';
     if (!query || content.length <= maxChars) return content.slice(0, maxChars);
 
@@ -985,6 +1016,52 @@ export class SearchEngine {
       }
     }
     return [];
+  }
+
+  /**
+   * Extract the top recurring topic keywords from a set of recent memories.
+   *
+   * These keywords are appended to the semantic query to make it context-aware:
+   * a short, ambiguous prompt like "make it responsive" becomes
+   * "make it responsive snake html game css" when the recent session context is
+   * about a snake game — preventing false recalls from unrelated domains.
+   *
+   * Intentionally lightweight: no LLM, no language-specific lists beyond a tiny
+   * universal stop-word set.  Works for any client and any language.
+   *
+   * @param {Array<{title:string, tags:string}>} memories
+   * @returns {string} space-separated hint terms (may be empty)
+   */
+  _buildSessionContextHint(memories) {
+    if (!memories?.length) return '';
+
+    // Minimal cross-language stop words — only words so common they add no signal.
+    const STOP = new Set([
+      'the','a','an','is','are','was','were','be','been','have','has',
+      'do','does','did','will','would','could','should','may','might',
+      'i','you','he','she','it','we','they','this','that','these','those',
+      'with','for','on','at','to','in','of','and','or','but','not','no',
+      // Common CJK function words
+      '的','了','是','在','有','和','我','你','他','她','它','们',
+      '这','那','就','也','都','说','要','到','去','来','把','被',
+    ]);
+
+    const freq = new Map();
+    for (const mem of memories) {
+      const text = `${mem.title || ''} ${mem.tags || ''}`;
+      const words = text.toLowerCase().split(/[\s\-_：:,，.。!！?？\[\]()（）<>/\\]+/);
+      for (const w of words) {
+        if (w.length >= 2 && !STOP.has(w) && /[\p{L}\p{N}]/u.test(w)) {
+          freq.set(w, (freq.get(w) || 0) + 1);
+        }
+      }
+    }
+
+    return [...freq.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([w]) => w)
+      .join(' ');
   }
 }
 

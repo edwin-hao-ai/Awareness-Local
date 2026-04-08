@@ -11,6 +11,30 @@ import {
   synthesizeRules,
 } from './helpers.mjs';
 
+/**
+ * Select the most relevant knowledge cards for the current context.
+ *
+ * When a focus query is provided, uses BM25 full-text search (searchKnowledge)
+ * to rank cards by relevance instead of pure recency. Falls back to recency
+ * when the indexer lacks searchKnowledge or the query yields too few results.
+ *
+ * @param {object} indexer
+ * @param {number} maxCards
+ * @param {string|undefined} focus - current user query / focus string
+ * @returns {Array}
+ */
+function _selectRelevantCards(indexer, maxCards, focus) {
+  if (focus && typeof indexer.searchKnowledge === 'function') {
+    const searched = indexer.searchKnowledge(focus, { limit: maxCards });
+    if (searched.length >= maxCards) return searched;
+    // Supplement with most-recent cards when search returns fewer than requested
+    const searchedIds = new Set(searched.map((c) => c.id));
+    const recent = indexer.getRecentKnowledge(maxCards).filter((c) => !searchedIds.has(c.id));
+    return [...searched, ...recent].slice(0, maxCards);
+  }
+  return indexer.getRecentKnowledge(maxCards);
+}
+
 export function buildInitResult({
   createSession,
   indexer,
@@ -23,7 +47,8 @@ export function buildInitResult({
 }) {
   const session = createSession(source);
   const stats = indexer.getStats();
-  const recentCards = indexer.getRecentKnowledge(maxCards);
+  const focus = renderContextOptions?.currentFocus?.trim() || undefined;
+  const recentCards = _selectRelevantCards(indexer, maxCards, focus);
   const allActiveCards = indexer.getRecentKnowledge(200);
   const openTasks = indexer.getOpenTasks(maxTasks);
   const rawSessions = indexer.getRecentSessions(days);
@@ -118,7 +143,7 @@ function _buildInitPerception(indexer, allCards) {
   for (const card of pitfalls) {
     signals.push({
       type: 'guard',
-      message: `⚠️ Known pitfall: ${card.title} — ${(card.summary || '').slice(0, 150)}`,
+      message: `⚠️ Known pitfall: ${card.title} — ${(card.summary || '').slice(0, 300)}`,
     });
   }
 

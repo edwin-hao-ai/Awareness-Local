@@ -1,0 +1,51 @@
+[awareness-local] indexed 0 files, skipped 0
+[awareness-local] daemon running at http://localhost:37800
+[awareness-local] MCP endpoint: http://localhost:37800/mcp
+
+[awareness-local] shutting down...
+[awareness-local] daemon stopped
+libc++abi: terminating due to uncaught exception of type std::__1::system_error: mutex lock failed: Invalid argument
+[awareness-local] Embedder loaded — hybrid vector+FTS5 search enabled
+[awareness-local] indexed 0 files, skipped 6
+[awareness-local] Pre-warming embedding model "Xenova/all-MiniLM-L6-v2" (first run downloads ~23MB)...
+[awareness-local] Port 37800 is already in use.
+  Possible causes:
+  - Another awareness-local instance is running (try: awareness-local status)
+  - Another application is using port 37800
+  Fix: Run "awareness-local stop" or "lsof -i :37800" to find the process.
+Fatal error: listen EADDRINUSE: address already in use 127.0.0.1:37800
+[awareness-local] Embedder loaded — hybrid vector+FTS5 search enabled
+[awareness-local] indexed 0 files, skipped 6
+[awareness-local] Pre-warming embedding model "Xenova/all-MiniLM-L6-v2" (first run downloads ~23MB)...
+[awareness-local] daemon running at http://localhost:37800
+[awareness-local] MCP endpoint: http://localhost:37800/mcp
+[awareness-local] Embedding model ready in 0.2s — hybrid search active
+[awareness-local] Multilingual model (Xenova/multilingual-e5-small) available — auto-loads on CJK content
+[awareness-local] backfilling embeddings for 6 memories...
+
+[awareness-local] shutting down...
+[awareness-local] daemon stopped
+[awareness-local] Embedder loaded — hybrid vector+FTS5 search enabled
+[awareness-local] indexed 0 files, skipped 6
+[awareness-local] Pre-warming embedding model "Xenova/all-MiniLM-L6-v2" (first run downloads ~23MB)...
+[awareness-local] daemon running at http://localhost:37800
+[awareness-local] MCP endpoint: http://localhost:37800/mcp
+[awareness-local] Embedding model ready in 0.2s — hybrid search active
+[awareness-local] Multilingual model (Xenova/multilingual-e5-small) available — auto-loads on CJK content
+[awareness-local] backfilling embeddings for 6 memories...
+[awareness-local] embedding failed for mem_20260328_133331_2b72 : Load model from /Users/edwinhao/Awareness/sdks/local/node_modules/@huggingface/transformers/.cache/Xenova/multilingual-e5-small/onnx/model_quantized.onnx failed:Protobuf parsing failed.
+[awareness-local] embedding failed for mem_20260328_133332_fd6b : Load model from /Users/edwinhao/Awareness/sdks/local/node_modules/@huggingface/transformers/.cache/Xenova/multilingual-e5-small/onnx/model_quantized.onnx failed:Protobuf parsing failed.
+[awareness-local] embedding failed for mem_20260328_133332_15e3 : Load model from /Users/edwinhao/Awareness/sdks/local/node_modules/@huggingface/transformers/.cache/Xenova/multilingual-e5-small/onnx/model_quantized.onnx failed:Protobuf parsing failed.
+[awareness-local] embedding failed for mem_20260328_133332_f8a6 : Load model from /Users/edwinhao/Awareness/sdks/local/node_modules/@huggingface/transformers/.cache/Xenova/multilingual-e5-small/onnx/model_quantized.onnx failed:Protobuf parsing failed.
+[awareness-local] embedding failed for mem_20260328_133433_2186 : Load model from /Users/edwinhao/Awareness/sdks/local/node_modules/@huggingface/transformers/.cache/Xenova/multilingual-e5-small/onnx/model_quantized.onnx failed:Protobuf parsing failed.
+[awareness-local] embedding backfill complete: 6/6 memories embedded
+
+[awareness-local] shutting down...
+[awareness-local] daemon stopped
+[awareness-local] embedding failed for mem_20260328_133331_2b72 : Cannot read properties of null (reading 'storeEmbedding')
+[awareness-local] embedding failed for mem_20260328_133332_fd6b : Cannot read properties of null (reading 'storeEmbedding')
+[awareness-local] embedding failed for mem_20260328_133332_15e3 : Cannot read properties of null (reading 'storeEmbedding')
+[awareness-local] embedding failed for mem_20260328_133332_f8a6 : Cannot read properties of null (reading 'storeEmbedding')
+[awareness-local] embedding failed for mem_20260328_133433_2186 : Cannot read properties of null (reading 'storeEmbedding')
+[awareness-local] embedding failed for mem_20260328_133523_159a : Cannot read properties of null (reading 'storeEmbedding')
+[awareness-local] embedding backfill complete: 6/6 memories embedded

@@ -27,6 +27,56 @@ const VALID_CATEGORIES = new Set([
   'risk', 'skill',
 ]);
 
+/**
+ * Structural quality gate for knowledge cards submitted by AI agents.
+ *
+ * Rejects cards that lack prose content — i.e. cards whose body, after
+ * stripping fenced code blocks, contains no meaningful natural-language text.
+ * This catches system metadata dumps (e.g. raw JSON payloads passed as content)
+ * without inspecting or hardcoding any specific strings.
+ *
+ * Rules:
+ *   1. Title + summary combined must contain at least MIN_PROSE_CHARS
+ *      non-whitespace characters that are NOT inside a code fence.
+ *   2. At least one "word" (≥2 Unicode letters/digits in a row) must exist
+ *      outside of code fences.
+ *
+ * This is purely a structural check — it says nothing about whether the
+ * content is correct or relevant.  Wrong-but-prose cards still pass;
+ * correctness validation requires human review.
+ */
+// A card must have at least this many whitespace-separated prose tokens
+// (after stripping code fences) to be considered structurally valid.
+// This prevents pure system-metadata payloads (e.g. a raw JSON dump with a
+// single-line label) from being stored as knowledge.
+// Example failure: "Request: Sender (untrusted metadata):" → 4 tokens → rejected.
+// Example pass:    "Plugin 升级超时修复: npm pack 只有 60s" → 7+ tokens → accepted.
+const MIN_PROSE_TOKENS = 5;
+
+export function isStructurallyValidKnowledgeCard(kc) {
+  const title = String(kc.title || '').trim();
+  const body  = String(kc.content || kc.summary || '').trim();
+
+  // Strip fenced code blocks (``` ... ```) and inline code (` ... `) from body.
+  // The title is kept as-is since it never contains code fences.
+  const bodyProse = body.replace(/```[\s\S]*?```/g, ' ').replace(/`[^`]*`/g, ' ').trim();
+
+  // Must contain at least one word-like character somewhere.
+  if (!/[\p{L}\p{N}]{2}/u.test(`${title} ${bodyProse}`)) return false;
+
+  // Count UNIQUE prose tokens across title + body.
+  // Using a Set eliminates repetition — sender-metadata cards repeat the same
+  // label in both title and body, so their unique-token count stays low even
+  // though their raw token count looks acceptable.
+  const titleTokens  = title.split(/\s+/).filter(w => /[\p{L}\p{N}]/u.test(w));
+  const bodyTokens   = bodyProse.split(/\s+/).filter(w => /[\p{L}\p{N}]/u.test(w));
+  const uniqueTokens = new Set([...titleTokens, ...bodyTokens].map(w => w.toLowerCase()));
+
+  if (uniqueTokens.size < MIN_PROSE_TOKENS) return false;
+
+  return true;
+}
+
 /** Normalize a category string to a valid standard category.
  *  Only does case/whitespace normalization — no language-specific aliases.
  *  The MCP tool schema already enumerates valid categories so LLMs output them directly.
@@ -152,6 +202,7 @@ export class KnowledgeExtractor {
 
     if (insights.knowledge_cards) {
       for (const kc of insights.knowledge_cards) {
+        if (!isStructurallyValidKnowledgeCard(kc)) continue;
         cards.push({
           id: this._generateId('kc'),
           category: normalizeCategory(kc.category),
@@ -159,6 +210,7 @@ export class KnowledgeExtractor {
           summary: kc.content || kc.summary || '',
           confidence: kc.confidence ?? 0.85,
           tags: kc.tags || metadata.tags || [],
+          source: metadata.source || null,
           source_memory_id: metadata.id,
           created_at: new Date().toISOString(),
         });
