@@ -3,6 +3,9 @@ import { detectNeedsCJK } from '../core/lang-detect.mjs';
 /**
  * Pre-warm the embedding model (downloads on first run, ~23MB) then backfill.
  * Runs in background — daemon is fully usable during warmup via FTS5 fallback.
+ *
+ * Auto-recovery: if the cached model is corrupted, clears the cache and retries.
+ * This handles the common case of interrupted downloads or disk corruption.
  */
 export async function warmupEmbedder(daemon) {
   if (!daemon._embedder) return;
@@ -16,14 +19,16 @@ export async function warmupEmbedder(daemon) {
     const modelId = daemon._embedder.MODEL_MAP?.english || 'unknown';
     console.log(`[awareness-local] Pre-warming embedding model "${modelId}" (first run downloads ~23MB)...`);
     const t0 = Date.now();
+    // getEmbedder() has built-in auto-recovery for corrupted caches,
+    // so embed() will auto-clear and re-download if needed.
     await daemon._embedder.embed('warmup', 'query');
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     console.log(`[awareness-local] Embedding model ready in ${elapsed}s — hybrid search active`);
     console.log(`[awareness-local] Multilingual model (${daemon._embedder.MODEL_MAP?.multilingual || 'multilingual-e5-small'}) available — auto-loads on CJK content`);
   } catch (err) {
     console.warn(`[awareness-local] Embedding warmup failed: ${err.message}`);
-    console.warn('[awareness-local] Common causes: network timeout, disk full, or corrupted cache.');
-    console.warn('[awareness-local] Try: rm -rf ~/.cache/huggingface/hub && restart daemon');
+    console.warn('[awareness-local] Vector search disabled for this session. FTS5-only mode active.');
+    console.warn('[awareness-local] The daemon will auto-retry on next restart.');
     return;
   }
 

@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.23] - 2026-04-12
+
+### Added
+- **Skill auto-evolution** (`knowledge-extractor.mjs`, `daemon.mjs`): When a new knowledge card shares ≥2 tags with an existing skill, the skill automatically evolves. Dual path: cloud-connected uses LLM re-synthesis via `/skills/extract` API for precision; offline fallback appends the new card as a method step. 1-hour debounce prevents excessive updates.
+
+## [0.5.22] - 2026-04-12
+
+### Fixed
+- **ONNX model auto-recovery** (`embedder.mjs`): When the cached ONNX model is corrupted (e.g. interrupted download, disk issue), the embedder now automatically clears the corrupted cache and re-downloads the model on next use. Previously, a corrupted model file caused "Protobuf parsing failed" errors indefinitely until the user manually ran `rm -rf ~/.cache/huggingface/hub`. The auto-recovery covers both `getEmbedder()` pipeline loading and `warmupEmbedder()` startup path.
+
+## [0.5.21] - 2026-04-12
+
+### Added
+- **0.85+ merge zone** (`knowledge-extractor.mjs`): When vector cosine ≥ 0.85 but new summary is NOT longer AND tags overlap, merge into existing card instead of creating an evolution chain. Prevents barely-different update cards from accumulating.
+
+### Fixed
+- **NULL version column safety** (`knowledge-extractor.mjs`): Merge SQL now uses `COALESCE(version, 1) + 1` instead of `version + 1`, preventing silent NULL propagation on pre-migration databases.
+
 ## [0.5.20] - 2026-04-12
 
 ### Added

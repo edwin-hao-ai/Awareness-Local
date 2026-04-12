@@ -9,7 +9,13 @@
  *   "multilingual"  → Xenova/multilingual-e5-small   (118 MB, 100+ languages)
  *
  * Both produce 384-dimensional Float32Array vectors.
+ *
+ * Auto-recovery: if a cached ONNX model is corrupted (Protobuf parsing failed),
+ * the cache is automatically cleared and the model is re-downloaded on next call.
  */
+
+import fs from 'node:fs';
+import path from 'node:path';
 
 // ---------------------------------------------------------------------------
 // Model map
@@ -59,6 +65,120 @@ async function _loadHfModule() {
 }
 
 // ---------------------------------------------------------------------------
+// Auto-recovery for corrupted ONNX model cache
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect common HF Transformers cache directories.
+ * @returns {string[]} existing cache directories that may contain ONNX models.
+ */
+function _getCacheDirs() {
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+  const dirs = [
+    // HF Transformers JS default cache
+    path.join(home, '.cache', 'huggingface', 'hub'),
+    // @huggingface/transformers puts models under the package's .cache/
+    // (npx installs use a temp path — glob from the module location)
+  ];
+
+  // Also check the npx cache location if we can find the module
+  try {
+    const modPath = require.resolve?.('@huggingface/transformers') ||
+      import.meta.resolve?.('@huggingface/transformers');
+    if (modPath) {
+      const pkgDir = path.dirname(modPath.replace('file://', ''));
+      const localCache = path.join(pkgDir, '.cache');
+      if (fs.existsSync(localCache)) dirs.push(localCache);
+    }
+  } catch {
+    // Module not resolvable — skip
+  }
+
+  return dirs.filter((d) => fs.existsSync(d));
+}
+
+/**
+ * Clear corrupted ONNX model cache for a specific model.
+ * Returns true if any cache was cleared.
+ *
+ * @param {string} modelId — e.g. 'Xenova/all-MiniLM-L6-v2'
+ * @returns {boolean}
+ */
+export function clearModelCache(modelId) {
+  const modelSlug = modelId.replace('/', '--');
+  const patterns = [
+    `models--${modelSlug}`,  // HF hub format
+    modelSlug,               // flat format
+    modelId.split('/').pop(), // just the model name
+  ];
+
+  let cleared = false;
+  for (const dir of _getCacheDirs()) {
+    for (const pattern of patterns) {
+      const target = path.join(dir, pattern);
+      if (fs.existsSync(target)) {
+        try {
+          fs.rmSync(target, { recursive: true, force: true });
+          console.log(`[embedder] Cleared corrupted cache: ${target}`);
+          cleared = true;
+        } catch (err) {
+          console.warn(`[embedder] Failed to clear cache ${target}: ${err.message}`);
+        }
+      }
+    }
+  }
+  return cleared;
+}
+
+/**
+ * Check if an error indicates a corrupted ONNX model file.
+ * @param {Error} err
+ * @returns {boolean}
+ */
+function _isCorruptedModelError(err) {
+  const msg = String(err?.message || '');
+  return (
+    msg.includes('Protobuf parsing failed') ||
+    msg.includes('Failed to load model') ||
+    msg.includes('invalid model') ||
+    msg.includes('ONNX') && msg.includes('failed')
+  );
+}
+
+/**
+ * Load the HF pipeline with auto-recovery on corrupted cache.
+ * If the first attempt fails with a corruption error, clears the cache and retries once.
+ *
+ * @param {string} modelId
+ * @returns {Promise<Function|null>}
+ */
+async function _loadPipeline(modelId) {
+  const hf = await _loadHfModule();
+  if (!hf) return null;
+
+  try {
+    return await hf.pipeline('feature-extraction', modelId, { dtype: 'q8' });
+  } catch (err) {
+    if (_isCorruptedModelError(err)) {
+      console.warn(`[embedder] Model "${modelId}" cache is corrupted: ${err.message}`);
+      console.log('[embedder] Auto-clearing corrupted cache and re-downloading...');
+      clearModelCache(modelId);
+      // Retry once after clearing cache
+      try {
+        const pipe = await hf.pipeline('feature-extraction', modelId, { dtype: 'q8' });
+        console.log(`[embedder] Model "${modelId}" re-downloaded successfully.`);
+        return pipe;
+      } catch (retryErr) {
+        console.error(`[embedder] Model re-download failed: ${retryErr.message}`);
+        console.error('[embedder] Run manually: rm -rf ~/.cache/huggingface/hub && restart daemon');
+        throw retryErr;
+      }
+    }
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -76,16 +196,7 @@ export async function getEmbedder(language = 'english') {
   }
 
   // Store the promise itself so concurrent callers share the same load.
-  const loadPromise = (async () => {
-    const hf = await _loadHfModule();
-    if (!hf) return null;
-
-    const pipe = await hf.pipeline('feature-extraction', modelId, {
-      dtype: 'q8', // INT8 quantised
-    });
-    return pipe;
-  })();
-
+  const loadPromise = _loadPipeline(modelId);
   _pipelineCache.set(modelId, loadPromise);
 
   // If the load fails, evict the cache entry so the next call can retry.

@@ -1140,6 +1140,15 @@ ${card.summary || card.title || ''}
           console.warn('[awareness-local] autoMoc error:', e.message);
         }
 
+        // Skill auto-evolution: check if new card should evolve existing skills
+        try {
+          if (this.extractor) {
+            this.extractor._checkSkillEvolution(cardData).catch((err) => {
+              console.warn('[awareness-local] skill evolution check failed:', err.message);
+            });
+          }
+        } catch { /* non-critical */ }
+
         // F-034: Track eligible cards for crystallization hint check
         if (CRYSTALLIZATION_CATEGORIES.has(card.category)) {
           crystallizationCandidates.push({
