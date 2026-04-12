@@ -227,13 +227,13 @@ function _autoMitigateRisks(indexer, content, title) {
   try {
     const riskCards = indexer.db
       .prepare(
-        `SELECT kc.id, kc.title, kc.category, ft.rank
-         FROM knowledge_fts ft
-         JOIN knowledge_cards kc ON kc.id = ft.id
+        `SELECT kc.id, kc.title, kc.category, bm25(knowledge_fts) AS rank
+         FROM knowledge_fts
+         JOIN knowledge_cards kc ON kc.id = knowledge_fts.id
          WHERE knowledge_fts MATCH ?
            AND kc.status = 'active'
            AND kc.category IN ('pitfall', 'risk')
-         ORDER BY ft.rank
+         ORDER BY rank
          LIMIT 3`
       )
       .all(sanitized);

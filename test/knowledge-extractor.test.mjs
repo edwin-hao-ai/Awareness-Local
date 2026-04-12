@@ -672,3 +672,202 @@ describe('KnowledgeExtractor.extract', () => {
     assert.equal(result.cards[0].category, 'workflow');
   });
 });
+
+// ---------------------------------------------------------------------------
+// _checkConflict merge verdict tests (vector cosine simulation)
+// ---------------------------------------------------------------------------
+
+describe('KnowledgeExtractor._checkConflict merge verdict', () => {
+  /** Create a mock embedder that returns predictable cosine similarities. */
+  function createMockEmbedder(similarityMap = {}) {
+    // Simple: embed returns a fixed vector based on the first word
+    const vectors = new Map();
+    let dim = 4;
+    return {
+      MODEL_MAP: { english: 'mock-model' },
+      async isEmbeddingAvailable() { return true; },
+      async embed(text) {
+        if (!vectors.has(text)) {
+          // Random-ish but deterministic per text
+          const seed = [...text].reduce((s, c) => s + c.charCodeAt(0), 0);
+          vectors.set(text, new Float32Array([
+            Math.sin(seed), Math.cos(seed), Math.sin(seed * 2), Math.cos(seed * 3),
+          ]));
+        }
+        return vectors.get(text);
+      },
+      cosineSimilarity(a, b) {
+        // Use the similarity map if available, else compute real cosine
+        const key = `${a[0].toFixed(2)}_${b[0].toFixed(2)}`;
+        if (similarityMap[key] !== undefined) return similarityMap[key];
+        let dot = 0, na = 0, nb = 0;
+        for (let i = 0; i < a.length; i++) {
+          dot += a[i] * b[i]; na += a[i] ** 2; nb += b[i] ** 2;
+        }
+        const d = Math.sqrt(na) * Math.sqrt(nb);
+        return d === 0 ? 0 : dot / d;
+      },
+    };
+  }
+
+  it('returns merge verdict when cosine >= 0.70, same category, and tags overlap', async () => {
+    const existingCard = {
+      id: 'kc_existing_001',
+      title: 'Docker optimization guide',
+      summary: 'Docker multi-stage builds reduce image size.',
+      category: 'workflow',
+      tags: JSON.stringify(['docker', 'optimization']),
+      status: 'active',
+    };
+
+    // Embedder that forces high similarity for any pair
+    const embedder = createMockEmbedder();
+    // Override cosineSimilarity to return 0.75 (merge zone)
+    embedder.cosineSimilarity = () => 0.75;
+
+    const indexer = createMockIndexer({
+      searchKnowledge: () => [],  // BM25 finds nothing
+      getRecentKnowledge: () => [existingCard],
+    });
+
+    const extractor = new KnowledgeExtractor(createMockStore(), indexer, embedder);
+    const result = await extractor._checkConflict({
+      title: 'Docker build best practices',
+      summary: 'Multi-stage builds separate compilation from runtime.',
+      category: 'workflow',
+      tags: ['docker', 'optimization'],
+    });
+
+    assert.equal(result.verdict, 'merge');
+    assert.equal(result.matchId, 'kc_existing_001');
+  });
+
+  it('returns new when cosine >= 0.70 but tags do NOT overlap', async () => {
+    const existingCard = {
+      id: 'kc_existing_002',
+      title: 'Docker optimization guide',
+      summary: 'Docker stuff.',
+      category: 'workflow',
+      tags: JSON.stringify(['docker', 'optimization']),
+      status: 'active',
+    };
+
+    const embedder = createMockEmbedder();
+    embedder.cosineSimilarity = () => 0.75;
+
+    const indexer = createMockIndexer({
+      searchKnowledge: () => [],
+      getRecentKnowledge: () => [existingCard],
+    });
+
+    const extractor = new KnowledgeExtractor(createMockStore(), indexer, embedder);
+    const result = await extractor._checkConflict({
+      title: 'Kubernetes deployment',
+      summary: 'K8s rolling updates.',
+      category: 'workflow',
+      tags: ['kubernetes', 'deployment'],  // no overlap with docker/optimization
+    });
+
+    assert.equal(result.verdict, 'new');
+  });
+
+  it('returns merge in 0.85+ zone when new summary is shorter and tags overlap', async () => {
+    const existingCard = {
+      id: 'kc_existing_003',
+      title: 'Docker optimization guide',
+      summary: 'A very long and detailed summary about Docker multi-stage builds and optimization techniques.',
+      category: 'workflow',
+      tags: JSON.stringify(['docker', 'optimization']),
+      status: 'active',
+    };
+
+    const embedder = createMockEmbedder();
+    embedder.cosineSimilarity = () => 0.88;  // update zone
+
+    const indexer = createMockIndexer({
+      searchKnowledge: () => [],
+      getRecentKnowledge: () => [existingCard],
+    });
+
+    const extractor = new KnowledgeExtractor(createMockStore(), indexer, embedder);
+    const result = await extractor._checkConflict({
+      title: 'Docker build tips',
+      summary: 'Short tip.',  // shorter than existing
+      category: 'workflow',
+      tags: ['docker'],  // overlaps with existing
+    });
+
+    assert.equal(result.verdict, 'merge');
+    assert.equal(result.matchId, 'kc_existing_003');
+  });
+
+  it('returns update in 0.85+ zone when new summary is longer', async () => {
+    const existingCard = {
+      id: 'kc_existing_004',
+      title: 'Docker optimization',
+      summary: 'Short.',
+      category: 'workflow',
+      tags: JSON.stringify(['docker']),
+      status: 'active',
+    };
+
+    const embedder = createMockEmbedder();
+    embedder.cosineSimilarity = () => 0.88;
+
+    const indexer = createMockIndexer({
+      searchKnowledge: () => [],
+      getRecentKnowledge: () => [existingCard],
+    });
+
+    const extractor = new KnowledgeExtractor(createMockStore(), indexer, embedder);
+    const result = await extractor._checkConflict({
+      title: 'Docker optimization expanded',
+      summary: 'A much longer and more detailed summary that supersedes the short existing one.',
+      category: 'workflow',
+      tags: ['docker'],
+    });
+
+    assert.equal(result.verdict, 'update');
+  });
+
+  it('returns new when cosine < 0.70', async () => {
+    const existingCard = {
+      id: 'kc_existing_005',
+      title: 'Docker stuff',
+      summary: 'Something about Docker.',
+      category: 'workflow',
+      tags: JSON.stringify(['docker']),
+      status: 'active',
+    };
+
+    const embedder = createMockEmbedder();
+    embedder.cosineSimilarity = () => 0.55;
+
+    const indexer = createMockIndexer({
+      searchKnowledge: () => [],
+      getRecentKnowledge: () => [existingCard],
+    });
+
+    const extractor = new KnowledgeExtractor(createMockStore(), indexer, embedder);
+    const result = await extractor._checkConflict({
+      title: 'PostgreSQL query optimization',
+      summary: 'Index design for large tables.',
+      category: 'workflow',
+      tags: ['docker'],
+    });
+
+    assert.equal(result.verdict, 'new');
+  });
+
+  it('skips vector check when no embedder', async () => {
+    const indexer = createMockIndexer({ searchKnowledge: () => [] });
+    const extractor = new KnowledgeExtractor(createMockStore(), indexer, null);
+    const result = await extractor._checkConflict({
+      title: 'Anything',
+      summary: 'Whatever.',
+      category: 'workflow',
+      tags: [],
+    });
+    assert.equal(result.verdict, 'new');
+  });
+});

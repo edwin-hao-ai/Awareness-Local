@@ -49,3 +49,15 @@ Fatal error: listen EADDRINUSE: address already in use 127.0.0.1:37800
 [awareness-local] embedding failed for mem_20260328_133433_2186 : Cannot read properties of null (reading 'storeEmbedding')
 [awareness-local] embedding failed for mem_20260328_133523_159a : Cannot read properties of null (reading 'storeEmbedding')
 [awareness-local] embedding backfill complete: 6/6 memories embedded
+[awareness-local] Embedder loaded — hybrid vector+FTS5 search enabled
+[awareness-local] indexed 0 files, skipped 7
+[awareness-local] Pre-warming embedding model "Xenova/all-MiniLM-L6-v2" (first run downloads ~23MB)...
+[awareness-local] daemon running at http://localhost:37899
+[awareness-local] MCP endpoint: http://localhost:37899/mcp
+[awareness-local] Embedding model ready in 0.2s — hybrid search active
+[awareness-local] Multilingual model (Xenova/multilingual-e5-small) available — auto-loads on CJK content
+[awareness-local] backfilling embeddings for 5 memories...
+[awareness-local] embedding backfill complete: 5/5 memories embedded
+
+[awareness-local] shutting down...
+[awareness-local] daemon stopped
