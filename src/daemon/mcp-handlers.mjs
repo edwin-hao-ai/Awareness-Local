@@ -191,7 +191,7 @@ function _computeSignalId(sig) {
   return `sig_${sig.type}_${Math.abs(hash).toString(36)}`;
 }
 
-export async function buildRecallResult({ search, args, mode = 'local' }) {
+export async function buildRecallResult({ search, args, mode = 'local', indexer = null }) {
   if (args.detail === 'full' && args.ids?.length) {
     const items = search
       ? await search.getFullContent(args.ids)
@@ -211,7 +211,69 @@ export async function buildRecallResult({ search, args, mode = 'local' }) {
     return buildRecallNoResultsContent();
   }
 
-  return buildRecallSummaryContent(summaries, mode);
+  const result = buildRecallSummaryContent(summaries, mode);
+
+  // Attach matching skills as recommendations (tag overlap with query terms)
+  if (indexer?.db && (args.semantic_query || args.keyword_query)) {
+    try {
+      const matchedSkills = _findMatchingSkills(indexer.db, args.semantic_query || args.keyword_query);
+      if (matchedSkills.length > 0) {
+        result._matched_skills = matchedSkills;
+        // Append skill hint to the text content
+        const skillHints = matchedSkills.map(
+          s => `  💡 Skill available: "${s.name}" (${s.method_count} steps) — call awareness_apply_skill(skill_id="${s.id}") to execute`
+        ).join('\n');
+        if (result.content && Array.isArray(result.content)) {
+          const textBlock = result.content.find(c => c.type === 'text');
+          if (textBlock) {
+            textBlock.text += `\n\n---\nMatched skills:\n${skillHints}`;
+          }
+        }
+      }
+    } catch { /* non-critical */ }
+  }
+
+  return result;
+}
+
+/**
+ * Find skills whose tags overlap with query keywords.
+ */
+function _findMatchingSkills(db, query) {
+  const queryWords = new Set(
+    query.toLowerCase().split(/\s+/).filter(w => w.length >= 2)
+  );
+  if (queryWords.size === 0) return [];
+
+  let skills;
+  try {
+    skills = db.prepare(
+      "SELECT id, name, summary, methods, tags FROM skills WHERE status = 'active' AND decay_score > 0.3"
+    ).all();
+  } catch { return []; }
+
+  const matched = [];
+  for (const skill of skills) {
+    let tags;
+    try { tags = JSON.parse(skill.tags || '[]'); } catch { tags = []; }
+    const tagSet = new Set(tags.map(t => (t || '').toLowerCase()));
+
+    // Count how many query words match skill tags
+    const overlap = [...queryWords].filter(w => tagSet.has(w)).length;
+    if (overlap >= 1) {
+      let methods;
+      try { methods = JSON.parse(skill.methods || '[]'); } catch { methods = []; }
+      matched.push({
+        id: skill.id,
+        name: skill.name,
+        summary: skill.summary,
+        method_count: methods.length,
+        tag_overlap: overlap,
+      });
+    }
+  }
+
+  return matched.sort((a, b) => b.tag_overlap - a.tag_overlap).slice(0, 3);
 }
 
 export function buildAgentPromptResult({ loadSpec, role }) {

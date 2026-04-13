@@ -255,6 +255,18 @@ export function getToolDefinitions() {
       },
     },
     {
+      name: 'awareness_apply_skill',
+      description: 'Apply a learned skill — returns structured step-by-step execution plan. Call this when a task matches an active skill from awareness_init. The skill will be marked as used automatically.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          skill_id: { type: 'string', description: 'ID of the skill to apply (from active_skills in awareness_init)' },
+          context: { type: 'string', description: 'Current task context — the skill methods will be adapted to this context' },
+        },
+        required: ['skill_id'],
+      },
+    },
+    {
       name: 'awareness_mark_skill_used',
       description: 'Mark a skill as used — resets decay timer and increments usage counter.',
       inputSchema: {

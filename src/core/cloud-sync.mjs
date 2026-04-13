@@ -418,7 +418,8 @@ export class CloudSync {
       cards = this.indexer.db.prepare(
         `SELECT id, category, title, summary, confidence, status, tags,
                 source_memories, parent_card_id, evolution_type,
-                cloud_id, version, schema_version, local_id
+                cloud_id, version, schema_version, local_id,
+                COALESCE(recall_count, 0) AS recall_count
          FROM knowledge_cards
          WHERE synced_to_cloud = 0 AND status IN ('active', 'superseded')
          ORDER BY created_at ASC`
@@ -442,6 +443,7 @@ export class CloudSync {
         confidence: card.confidence ?? 0.7, tags: card.tags || '[]',
         local_id: card.local_id || card.id,
         version: card.version || 1, schema_version: card.schema_version || 1,
+        recall_count: card.recall_count || 0,
       };
       if (card.cloud_id) pushCard.id = card.cloud_id;
 
@@ -490,10 +492,12 @@ export class CloudSync {
     if (existingLocalId) {
       // Update existing local card
       try {
+        // F-038 T-005.5: recall_count uses MAX(local, cloud) to avoid losing counts
         this.indexer.db.prepare(
           `UPDATE knowledge_cards SET title = ?, summary = ?, category = ?, status = ?,
            confidence = ?, tags = ?, version = ?, schema_version = ?, cloud_id = ?,
-           growth_stage = ?, last_pulled_at = ?, sync_status = 'synced'
+           growth_stage = ?, last_pulled_at = ?, sync_status = 'synced',
+           recall_count = MAX(COALESCE(recall_count, 0), ?)
            WHERE id = ?`
         ).run(
           card.title || '', card.summary || '', card.category || 'key_point',
@@ -501,7 +505,8 @@ export class CloudSync {
           typeof card.tags === 'string' ? card.tags : JSON.stringify(card.tags || []),
           card.version || 1, card.schema_version || 1, card.id,
           card.growth_stage || 'seedling',
-          new Date().toISOString(), existingLocalId,
+          new Date().toISOString(),
+          card.recall_count || 0, existingLocalId,
         );
         return 'updated';
       } catch (err) {
@@ -517,14 +522,14 @@ export class CloudSync {
       this.indexer.db.prepare(
         `INSERT OR IGNORE INTO knowledge_cards (id, category, title, summary, source_memories, confidence,
          status, tags, parent_card_id, evolution_type, created_at, filepath, synced_to_cloud,
-         cloud_id, version, schema_version, last_pulled_at, sync_status, growth_stage)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, 'synced', ?)`
+         cloud_id, version, schema_version, last_pulled_at, sync_status, growth_stage, recall_count)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, 'synced', ?, ?)`
       ).run(
         localId, card.category || 'key_point', card.title || '', card.summary || '',
         JSON.stringify(card.source_memories || []), card.confidence || 0.7,
         card.status || 'active', tags, null, 'initial', now,
         `cloud-pull:${card.id}`, card.id, card.version || 1, card.schema_version || 1, now,
-        card.growth_stage || 'seedling',
+        card.growth_stage || 'seedling', card.recall_count || 0,
       );
       setSyncState(this.indexer, `cloud_kc:${card.id}`, localId);
       setSyncState(this.indexer, `local_kc_to_cloud:${localId}`, card.id);

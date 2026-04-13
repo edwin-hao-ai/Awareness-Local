@@ -30,6 +30,8 @@ const SUBDIRS = [
   'tasks',
   'tasks/open',
   'tasks/done',
+  'documents',   // F-038: converted documents (PDF/DOCX → markdown)
+  'workspace',   // F-038: workspace scan state and cache
 ];
 
 /** Files/patterns that must NOT be committed to Git */
@@ -44,6 +46,11 @@ daemon.log
 
 # Cloud sync credentials (security-sensitive)
 config.json
+
+# F-038: Workspace scan state (rebuilt locally)
+scan-state.json
+documents/
+workspace/
 `;
 
 /** Default configuration matching spec section 7.5 */

@@ -158,9 +158,9 @@ export function buildContextXml(ctx, recallResults, perceptionSignals, options =
   // --- Skills (always full, tiny) ---
   const skills = ctx.active_skills || [];
   if (skills.length > 0) {
-    parts.push("  <skills>");
+    parts.push("  <skills hint=\"Call awareness_apply_skill(skill_id=ID) to get step-by-step execution plan\">");
     for (const skill of skills) {
-      parts.push(`    <skill title="${esc(skill.title || "")}">${esc(skill.summary || "")}</skill>`);
+      parts.push(`    <skill id="${esc(skill.id || "")}" title="${esc(skill.title || "")}">${esc(skill.summary || "")}</skill>`);
     }
     parts.push("  </skills>");
   }

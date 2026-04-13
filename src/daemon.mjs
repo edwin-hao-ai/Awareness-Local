@@ -53,7 +53,12 @@ import {
 import { handleHealthz, handleWebUi } from './daemon/http-handlers.mjs';
 import { callMcpTool } from './daemon/tool-bridge.mjs';
 import { httpJson } from './daemon/cloud-http.mjs';
-import { startFileWatcher } from './daemon/file-watcher.mjs';
+import { startFileWatcher, startWorkspaceWatcher, startGitHeadWatcher } from './daemon/file-watcher.mjs';
+import { scanWorkspace, indexWorkspaceFiles, getGitChanges, getCurrentCommit, isGitRepo, markDeletedFiles, handleRenamedFiles } from './core/workspace-scanner.mjs';
+import { loadScanState, saveScanState, createScanState, updateScanState, appendScanError } from './core/scan-state.mjs';
+import { loadScanConfig } from './core/scan-config.mjs';
+import { loadGitignoreRules } from './core/gitignore-parser.mjs';
+import { classifyFile } from './core/scan-defaults.mjs';
 import {
   backfillEmbeddings,
   embedAndStore,
@@ -188,6 +193,13 @@ export class AwarenessLocalDaemon {
 
     // Skill decay timer (runs every 24h)
     this._skillDecayTimer = null;
+
+    // F-038: Workspace scanner state
+    this.scanState = createScanState();
+    this.scanConfig = null;
+    this._scanAbortController = null;
+    this._workspaceWatcher = null;
+    this._gitHeadWatcher = null;
 
     // Track uptime
     this._startedAt = null;
@@ -342,6 +354,9 @@ export class AwarenessLocalDaemon {
     // ---- File watcher ----
     this._startFileWatcher();
 
+    // ---- F-038: Workspace scanner (background, non-blocking) ----
+    this._initWorkspaceScanner();
+
     // ---- Skill decay timer (every 24h) ----
     this._startSkillDecayTimer();
 
@@ -371,6 +386,20 @@ export class AwarenessLocalDaemon {
     if (this._skillDecayTimer) {
       clearInterval(this._skillDecayTimer);
       this._skillDecayTimer = null;
+    }
+
+    // Stop workspace watchers (F-038)
+    if (this._scanAbortController) {
+      this._scanAbortController.abort();
+      this._scanAbortController = null;
+    }
+    if (this._workspaceWatcher) {
+      this._workspaceWatcher.close();
+      this._workspaceWatcher = null;
+    }
+    if (this._gitHeadWatcher) {
+      this._gitHeadWatcher.close();
+      this._gitHeadWatcher = null;
     }
 
     // Stop cloud sync
@@ -1568,6 +1597,242 @@ ${item.description || item.title || ''}
   /** Start watching .awareness/memories/ for changes (debounced reindex). */
   _startFileWatcher() {
     this.watcher = startFileWatcher(this);
+  }
+
+  // -----------------------------------------------------------------------
+  // F-038: Workspace Scanner
+  // -----------------------------------------------------------------------
+
+  /**
+   * Initialize workspace scanner: load state, start watchers, trigger first scan.
+   * All operations are non-blocking — errors degrade gracefully.
+   */
+  _initWorkspaceScanner() {
+    try {
+      this.scanConfig = loadScanConfig(this.projectDir);
+      if (!this.scanConfig.enabled) {
+        console.log('[workspace-scanner] disabled via scan-config.json');
+        return;
+      }
+
+      // Load persisted state (for last_git_commit etc.)
+      this.scanState = loadScanState(this.projectDir);
+
+      // Start workspace file watcher
+      this._workspaceWatcher = startWorkspaceWatcher(this);
+
+      // Start .git/HEAD watcher
+      if (isGitRepo(this.projectDir)) {
+        this._gitHeadWatcher = startGitHeadWatcher(this);
+      }
+
+      // Trigger initial scan in background (deferred 3s to avoid blocking startup)
+      setTimeout(() => {
+        this.triggerScan('incremental').catch(err => {
+          console.error('[workspace-scanner] initial scan failed:', err.message);
+        });
+      }, 3000);
+
+      console.log('[workspace-scanner] initialized, first scan in 3s');
+    } catch (err) {
+      console.error('[workspace-scanner] init failed (degraded):', err.message);
+    }
+  }
+
+  /**
+   * Trigger a workspace scan. Supports 'full' and 'incremental' modes.
+   *
+   * - Full: re-scans all files regardless of git state
+   * - Incremental: uses git diff to detect changes since last commit
+   *
+   * Non-blocking — yields to event loop between batches.
+   *
+   * @param {'full'|'incremental'} mode
+   * @returns {Promise<import('./core/workspace-scanner.mjs').IndexResult>}
+   */
+  async triggerScan(mode = 'incremental') {
+    if (!this.indexer || !this.scanConfig?.enabled) {
+      return { indexed: 0, skipped: 0, errors: 0, edges: 0 };
+    }
+
+    // Prevent concurrent scans
+    if (this.scanState.status === 'scanning' || this.scanState.status === 'indexing') {
+      console.log('[workspace-scanner] scan already in progress, skipping');
+      return { indexed: 0, skipped: 0, errors: 0, edges: 0 };
+    }
+
+    const startTime = Date.now();
+    this._scanAbortController = new AbortController();
+
+    try {
+      this.scanState = updateScanState(this.scanState, {
+        status: 'scanning',
+        phase: 'discovering',
+      });
+
+      const config = this.scanConfig;
+      const gitignore = loadGitignoreRules(this.projectDir, {
+        extraPatterns: config.exclude,
+      });
+
+      let filesToIndex;
+
+      if (mode === 'incremental' && config.git_incremental && isGitRepo(this.projectDir)) {
+        const currentCommit = getCurrentCommit(this.projectDir);
+        const lastCommit = this.scanState.last_git_commit;
+
+        if (currentCommit && currentCommit === lastCommit) {
+          // No changes since last scan
+          this.scanState = updateScanState(this.scanState, {
+            status: 'idle',
+            phase: null,
+            last_incremental_at: new Date().toISOString(),
+          });
+          return { indexed: 0, skipped: 0, errors: 0, edges: 0 };
+        }
+
+        const gitChanges = getGitChanges(this.projectDir, lastCommit);
+
+        if (gitChanges) {
+          // Handle deletions and renames first
+          if (gitChanges.deleted.length > 0) {
+            markDeletedFiles(gitChanges.deleted, this.indexer);
+          }
+          if (gitChanges.renamed.length > 0) {
+            handleRenamedFiles(gitChanges.renamed, this.indexer);
+          }
+
+          // Filter changed files through the scan pipeline
+          const changedPaths = [
+            ...gitChanges.added,
+            ...gitChanges.modified,
+            ...gitChanges.renamed.map(r => r.to),
+          ];
+
+          filesToIndex = changedPaths
+            .map(relPath => {
+              const absPath = path.join(this.projectDir, relPath);
+              if (!fs.existsSync(absPath)) return null;
+
+              const classification = classifyFile(relPath, config);
+              if (classification.excluded) return null;
+              if (gitignore.isIgnored(relPath)) return null;
+
+              let stat;
+              try { stat = fs.statSync(absPath); } catch { return null; }
+
+              return {
+                absolutePath: absPath,
+                relativePath: relPath,
+                category: classification.category,
+                size: stat.size,
+                mtime: stat.mtimeMs,
+                oversized: stat.size > (config.max_file_size_kb || 500) * 1024,
+              };
+            })
+            .filter(Boolean);
+
+          // Update commit tracking
+          if (currentCommit) {
+            this.scanState = updateScanState(this.scanState, {
+              last_git_commit: currentCommit,
+            });
+          }
+        } else {
+          // Git changes unavailable — do full scan
+          filesToIndex = scanWorkspace(this.projectDir, {
+            config,
+            gitignore,
+            signal: this._scanAbortController.signal,
+          });
+        }
+      } else {
+        // Full scan
+        filesToIndex = scanWorkspace(this.projectDir, {
+          config,
+          gitignore,
+          signal: this._scanAbortController.signal,
+        });
+      }
+
+      this.scanState = updateScanState(this.scanState, {
+        status: 'indexing',
+        phase: 'parsing',
+        discovered_total: filesToIndex.length,
+        index_total: filesToIndex.length,
+        index_done: 0,
+        index_skipped: 0,
+      });
+
+      // Index the files
+      const result = await indexWorkspaceFiles(filesToIndex, this.indexer, {
+        signal: this._scanAbortController.signal,
+        onProgress: (progress) => {
+          this.scanState = updateScanState(this.scanState, {
+            index_done: progress.done,
+            index_skipped: progress.skipped,
+          });
+        },
+      });
+
+      // Update git commit tracking (needed for both full and incremental scans)
+      if (!this.scanState.last_git_commit && isGitRepo(this.projectDir)) {
+        const headCommit = getCurrentCommit(this.projectDir);
+        if (headCommit) {
+          this.scanState = updateScanState(this.scanState, {
+            last_git_commit: headCommit,
+          });
+        }
+      }
+
+      // Count totals from graph_nodes
+      let totalFiles = 0;
+      let totalCodeFiles = 0;
+      let totalDocFiles = 0;
+      try {
+        totalFiles = this.indexer.db.prepare(
+          "SELECT count(*) AS c FROM graph_nodes WHERE node_type = 'file' AND status = 'active'"
+        ).get().c;
+        totalCodeFiles = this.indexer.db.prepare(
+          "SELECT count(*) AS c FROM graph_nodes WHERE node_type = 'file' AND status = 'active' AND json_extract(metadata, '$.category') = 'code'"
+        ).get().c;
+        totalDocFiles = this.indexer.db.prepare(
+          "SELECT count(*) AS c FROM graph_nodes WHERE node_type = 'file' AND status = 'active' AND json_extract(metadata, '$.category') = 'docs'"
+        ).get().c;
+      } catch { /* stats are non-critical */ }
+
+      const duration = Date.now() - startTime;
+      const scanType = mode === 'full' ? 'last_full_scan_at' : 'last_incremental_at';
+
+      this.scanState = updateScanState(this.scanState, {
+        status: 'idle',
+        phase: null,
+        total_files: totalFiles,
+        total_code_files: totalCodeFiles,
+        total_doc_files: totalDocFiles,
+        scan_duration_ms: duration,
+        [scanType]: new Date().toISOString(),
+      });
+
+      // Persist state
+      saveScanState(this.projectDir, this.scanState);
+
+      if (result.indexed > 0 || result.edges > 0) {
+        console.log(
+          `[workspace-scanner] ${mode} scan done: ${result.indexed} indexed, ${result.skipped} skipped, ${result.edges} edges (${duration}ms)`
+        );
+      }
+
+      return result;
+    } catch (err) {
+      this.scanState = appendScanError(
+        updateScanState(this.scanState, { status: 'error', phase: null }),
+        err.message
+      );
+      saveScanState(this.projectDir, this.scanState);
+      console.error('[workspace-scanner] scan error:', err.message);
+      return { indexed: 0, skipped: 0, errors: 1, edges: 0 };
+    }
   }
 
   // -----------------------------------------------------------------------

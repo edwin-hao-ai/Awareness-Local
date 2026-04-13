@@ -3,6 +3,10 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 
 import { jsonResponse, nowISO, readBody } from './helpers.mjs';
+import {
+  apiScanStatus, apiScanTrigger, apiScanFiles,
+  apiScanFileDetail, apiScanConfig, apiScanConfigUpdate,
+} from './scan-api-handlers.mjs';
 
 export async function handleApiRoute(daemon, req, res, url) {
   const route = url.pathname.replace('/api/v1', '');
@@ -148,6 +152,32 @@ export async function handleApiRoute(daemon, req, res, url) {
   if (route.startsWith('/knowledge/') && !route.endsWith('/evolution') && route !== '/knowledge/cleanup' && req.method === 'GET') {
     const cardId = decodeURIComponent(route.replace('/knowledge/', ''));
     return apiGetKnowledgeCard(daemon, req, res, cardId);
+  }
+
+  // --- F-038 Scan API ---
+  if (route === '/scan/status' && req.method === 'GET') {
+    return apiScanStatus(daemon, req, res);
+  }
+
+  if (route === '/scan/trigger' && req.method === 'POST') {
+    return apiScanTrigger(daemon, req, res);
+  }
+
+  if (route === '/scan/files' && req.method === 'GET') {
+    return apiScanFiles(daemon, req, res, url);
+  }
+
+  if (route.startsWith('/scan/file/') && req.method === 'GET') {
+    const fileId = decodeURIComponent(route.replace('/scan/file/', ''));
+    return apiScanFileDetail(daemon, req, res, fileId);
+  }
+
+  if (route === '/scan/config' && req.method === 'GET') {
+    return apiScanConfig(daemon, req, res);
+  }
+
+  if (route === '/scan/config' && req.method === 'PUT') {
+    return apiScanConfigUpdate(daemon, req, res);
   }
 
   return jsonResponse(res, { error: 'Not found', route }, 404);

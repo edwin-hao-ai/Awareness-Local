@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.24] - 2026-04-12
+
+### Added
+- **`awareness_apply_skill` MCP tool**: LLM can now actively call skills instead of passively reading injected text. Returns structured execution plan with methods, trigger conditions, and context-adapted guidance. Automatically marks skill as used (resets decay).
+- **Skill recommendations in recall**: When `awareness_recall` results match active skills by tag overlap, matched skills are appended with `awareness_apply_skill(skill_id=...)` call instructions. LLM can then invoke the skill tool directly.
+- **Skill ID in rendered context**: `<skills>` XML now includes `id` attribute and call hint for each skill.
+
 ## [0.5.23] - 2026-04-12
 
 ### Added

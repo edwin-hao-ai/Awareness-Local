@@ -29,6 +29,7 @@ export async function callMcpTool(daemon, name, args) {
       return buildRecallResult({
         search: daemon.search,
         args,
+        indexer: daemon.indexer,
       });
     }
 
@@ -63,6 +64,42 @@ export async function callMcpTool(daemon, name, args) {
         loadSpec: () => daemon._loadSpec(),
         role: args.role,
       }));
+    }
+
+    case 'awareness_apply_skill': {
+      const { skill_id, context } = args;
+      if (!skill_id) {
+        return mcpResult({ error: 'skill_id is required' });
+      }
+      try {
+        const skill = daemon.indexer.db
+          .prepare("SELECT * FROM skills WHERE id = ? AND status = 'active'")
+          .get(skill_id);
+        if (!skill) {
+          return mcpResult({ error: `Skill not found: ${skill_id}` });
+        }
+
+        // Mark as used (reset decay)
+        const now = new Date().toISOString();
+        daemon.indexer.db
+          .prepare("UPDATE skills SET usage_count = usage_count + 1, last_used_at = ?, decay_score = 1.0, updated_at = ? WHERE id = ?")
+          .run(now, now, skill_id);
+
+        const methods = JSON.parse(skill.methods || '[]');
+        const triggerConditions = JSON.parse(skill.trigger_conditions || '[]');
+
+        return mcpResult({
+          skill_name: skill.name,
+          summary: skill.summary,
+          methods,
+          trigger_conditions: triggerConditions,
+          source_card_count: JSON.parse(skill.source_card_ids || '[]').length,
+          usage_count: (skill.usage_count || 0) + 1,
+          guidance: `Execute this ${methods.length}-step skill "${skill.name}" for the current task${context ? `: "${context}"` : ''}. Follow each step in order. Adapt descriptions to the specific context. Report completion status after finishing.`,
+        });
+      } catch (err) {
+        return mcpResult({ error: `Failed to apply skill: ${err.message}` });
+      }
     }
 
     case 'awareness_mark_skill_used': {

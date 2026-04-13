@@ -141,6 +141,57 @@ CREATE INDEX IF NOT EXISTS idx_perception_state_type ON perception_state(signal_
 `;
 
 // ---------------------------------------------------------------------------
+// F-038 Graph-First Schema (Phase 0)
+// ---------------------------------------------------------------------------
+
+const GRAPH_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS graph_nodes (
+  id TEXT PRIMARY KEY,
+  node_type TEXT NOT NULL,
+  title TEXT,
+  content TEXT,
+  metadata TEXT,
+  content_hash TEXT,
+  salience_score REAL DEFAULT 0,
+  recall_count INTEGER DEFAULT 0,
+  status TEXT DEFAULT 'active',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_type ON graph_nodes(node_type);
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_status ON graph_nodes(status);
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_hash ON graph_nodes(content_hash);
+
+CREATE TABLE IF NOT EXISTS graph_edges (
+  from_node_id TEXT NOT NULL,
+  to_node_id TEXT NOT NULL,
+  edge_type TEXT NOT NULL,
+  weight REAL DEFAULT 1.0,
+  metadata TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (from_node_id, to_node_id, edge_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_graph_edges_from ON graph_edges(from_node_id);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_to ON graph_edges(to_node_id);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_type ON graph_edges(edge_type);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS graph_nodes_fts USING fts5(
+  id UNINDEXED, title, content,
+  tokenize='trigram'
+);
+
+CREATE TABLE IF NOT EXISTS graph_embeddings (
+  node_id TEXT PRIMARY KEY,
+  vector BLOB NOT NULL,
+  model_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (node_id) REFERENCES graph_nodes(id)
+);
+`;
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -304,6 +355,10 @@ export class Indexer {
     this._migrateCardTypeGrowthStage();
     // Migrate legacy skill cards to dedicated skills table (F-032)
     this._migrateLegacySkills();
+    // F-038: Add graph-first schema (nodes + edges)
+    this._migrateGraphSchema();
+    // F-038 T-005.5: Add recall_count to knowledge_cards
+    this._migrateRecallCount();
   }
 
   /**
@@ -399,6 +454,30 @@ export class Indexer {
       }
     } catch {
       // skills table might not exist yet on first run — SCHEMA_SQL handles creation
+    }
+  }
+
+  /**
+   * F-038: Create graph-first schema tables (Phase 0).
+   * Uses CREATE TABLE IF NOT EXISTS — safe to call repeatedly.
+   */
+  _migrateGraphSchema() {
+    try {
+      this.db.exec(GRAPH_SCHEMA_SQL);
+    } catch (err) {
+      console.warn('[indexer] graph schema migration warning:', err.message);
+    }
+  }
+
+  /**
+   * F-038 T-005.5: Add recall_count column to knowledge_cards.
+   * Tracks how many times a card has been recalled (positive reinforcement).
+   */
+  _migrateRecallCount() {
+    try {
+      this.db.exec('ALTER TABLE knowledge_cards ADD COLUMN recall_count INTEGER DEFAULT 0');
+    } catch {
+      // Column already exists — expected on subsequent runs
     }
   }
 
@@ -1062,13 +1141,271 @@ Return ONLY JSON: {"title": "...", "summary": "..."}`;
 
     params.push(limit, offset);
 
+    // F-038 T-005.5: Three-dimensional weighted ranking
+    // score = bm25 × 0.70 + log(recall_count+1) × 0.15 + link_count × 0.15
+    // Note: bm25() returns negative values (lower = better match), so we negate it
     const sql = `
-      SELECT k.*, bm25(knowledge_fts) AS rank
+      SELECT k.*,
+        bm25(knowledge_fts) AS bm25_raw,
+        (
+          (-bm25(knowledge_fts)) * 0.70
+          + ln(COALESCE(k.recall_count, 0) + 1) * 0.15
+          + (COALESCE(k.link_count_incoming, 0) + COALESCE(k.link_count_outgoing, 0)) * 0.15
+        ) AS weighted_rank
       FROM knowledge_fts
       JOIN knowledge_cards k ON k.id = knowledge_fts.id
       WHERE ${conditions.join(' AND ')}
-      ORDER BY rank
+      ORDER BY weighted_rank DESC
       LIMIT ? OFFSET ?
+    `;
+
+    const results = this.db.prepare(sql).all(...params);
+
+    // Increment recall_count for matched cards (fire-and-forget)
+    if (results.length > 0) {
+      this._incrementRecallCount(results.map(r => r.id));
+    }
+
+    return results;
+  }
+
+  /**
+   * Increment recall_count for the given card IDs.
+   * Called when cards are returned from search results.
+   *
+   * @param {string[]} cardIds
+   */
+  _incrementRecallCount(cardIds) {
+    if (!cardIds || cardIds.length === 0) return;
+    try {
+      const placeholders = cardIds.map(() => '?').join(', ');
+      this.db.prepare(
+        `UPDATE knowledge_cards SET recall_count = COALESCE(recall_count, 0) + 1 WHERE id IN (${placeholders})`
+      ).run(...cardIds);
+    } catch (err) {
+      console.warn('[indexer] recall_count increment failed:', err.message);
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // F-038: Graph operations (nodes + edges + traversal)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Get a graph node by ID.
+   *
+   * @param {string} nodeId
+   * @returns {{ id: string, node_type: string, title: string, content: string, content_hash: string, status: string } | null}
+   */
+  getGraphNode(nodeId) {
+    try {
+      return this.db.prepare('SELECT * FROM graph_nodes WHERE id = ?').get(nodeId) || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Insert or update a graph node.
+   *
+   * @param {Object} node
+   * @param {string} node.id
+   * @param {string} node.node_type - 'file' | 'symbol' | 'card' | 'wiki' | 'doc'
+   * @param {string} [node.title]
+   * @param {string} [node.content]
+   * @param {Object} [node.metadata]
+   * @param {string} [node.content_hash]
+   * @param {number} [node.salience_score]
+   * @returns {{ inserted: boolean }}
+   */
+  graphInsertNode(node) {
+    const now = new Date().toISOString();
+    const metadata = node.metadata ? JSON.stringify(node.metadata) : null;
+
+    try {
+      this.db.prepare(`
+        INSERT INTO graph_nodes (id, node_type, title, content, metadata, content_hash, salience_score, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          title = excluded.title,
+          content = excluded.content,
+          metadata = excluded.metadata,
+          content_hash = excluded.content_hash,
+          salience_score = COALESCE(excluded.salience_score, salience_score),
+          updated_at = excluded.updated_at
+      `).run(
+        node.id,
+        node.node_type,
+        node.title || null,
+        node.content || null,
+        metadata,
+        node.content_hash || null,
+        node.salience_score ?? 0,
+        now,
+        now
+      );
+
+      // Update FTS index (FTS5 doesn't support UPSERT — delete + insert)
+      this.db.prepare('DELETE FROM graph_nodes_fts WHERE id = ?').run(node.id);
+      this.db.prepare(`
+        INSERT INTO graph_nodes_fts (id, title, content)
+        VALUES (?, ?, ?)
+      `).run(node.id, node.title || '', node.content || '');
+
+      return { inserted: true };
+    } catch (err) {
+      console.warn('[indexer] graphInsertNode failed:', err.message);
+      return { inserted: false };
+    }
+  }
+
+  /**
+   * Insert or update a graph edge.
+   *
+   * @param {Object} edge
+   * @param {string} edge.from_node_id
+   * @param {string} edge.to_node_id
+   * @param {string} edge.edge_type - 'import' | 'doc_reference' | 'similarity' | 'evolution' | 'tag_share' | 'contains'
+   * @param {number} [edge.weight=1.0]
+   * @param {Object} [edge.metadata]
+   * @returns {{ inserted: boolean }}
+   */
+  graphInsertEdge(edge) {
+    const now = new Date().toISOString();
+    const metadata = edge.metadata ? JSON.stringify(edge.metadata) : null;
+
+    try {
+      this.db.prepare(`
+        INSERT INTO graph_edges (from_node_id, to_node_id, edge_type, weight, metadata, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(from_node_id, to_node_id, edge_type) DO UPDATE SET
+          weight = excluded.weight,
+          metadata = excluded.metadata
+      `).run(
+        edge.from_node_id,
+        edge.to_node_id,
+        edge.edge_type,
+        edge.weight ?? 1.0,
+        metadata,
+        now
+      );
+      return { inserted: true };
+    } catch (err) {
+      console.warn('[indexer] graphInsertEdge failed:', err.message);
+      return { inserted: false };
+    }
+  }
+
+  /**
+   * Traverse the graph from a starting node using WITH RECURSIVE.
+   * Returns all reachable nodes within maxDepth hops.
+   *
+   * @param {string} startId - Starting node ID
+   * @param {Object} [options]
+   * @param {number} [options.maxDepth=2] - Maximum traversal depth
+   * @param {string[]} [options.edgeTypes] - Filter by edge types (null = all)
+   * @param {string[]} [options.nodeTypes] - Filter result node types (null = all)
+   * @param {number} [options.limit=50] - Max nodes to return
+   * @returns {Array<{ id: string, node_type: string, title: string, depth: number, edge_type: string }>}
+   */
+  graphTraverse(startId, options = {}) {
+    const maxDepth = options.maxDepth ?? 2;
+    const limit = options.limit ?? 50;
+
+    // Build edge type filter
+    let edgeFilter = '';
+    const params = [startId];
+    if (Array.isArray(options.edgeTypes) && options.edgeTypes.length > 0) {
+      const placeholders = options.edgeTypes.map(() => '?').join(', ');
+      edgeFilter = `AND e.edge_type IN (${placeholders})`;
+      params.push(...options.edgeTypes);
+    }
+
+    // Build node type filter for final results
+    let nodeFilter = '';
+    if (Array.isArray(options.nodeTypes) && options.nodeTypes.length > 0) {
+      const placeholders = options.nodeTypes.map(() => '?').join(', ');
+      nodeFilter = `AND n.node_type IN (${placeholders})`;
+    }
+
+    const sql = `
+      WITH RECURSIVE traversal(id, depth, edge_type, path) AS (
+        -- Base case: starting node
+        SELECT ?, 0, 'start', ?
+        UNION ALL
+        -- Recursive: follow edges in both directions
+        SELECT
+          CASE WHEN e.from_node_id = t.id THEN e.to_node_id ELSE e.from_node_id END,
+          t.depth + 1,
+          e.edge_type,
+          t.path || ',' || CASE WHEN e.from_node_id = t.id THEN e.to_node_id ELSE e.from_node_id END
+        FROM traversal t
+        JOIN graph_edges e ON (e.from_node_id = t.id OR e.to_node_id = t.id)
+        WHERE t.depth < ?
+          ${edgeFilter}
+          -- Prevent cycles: don't revisit nodes already in path
+          AND t.path NOT LIKE '%' || CASE WHEN e.from_node_id = t.id THEN e.to_node_id ELSE e.from_node_id END || '%'
+      )
+      SELECT DISTINCT
+        n.id, n.node_type, n.title, n.content, n.metadata,
+        n.salience_score, n.recall_count,
+        t.depth, t.edge_type
+      FROM traversal t
+      JOIN graph_nodes n ON n.id = t.id
+      WHERE t.depth > 0
+        AND n.status = 'active'
+        ${nodeFilter}
+      ORDER BY t.depth ASC, n.salience_score DESC
+      LIMIT ?
+    `;
+
+    // Params: startId (base), startId (path), maxDepth, [edgeTypes...], [nodeTypes...], limit
+    const allParams = [startId, startId, maxDepth, ...params.slice(1)];
+    if (Array.isArray(options.nodeTypes) && options.nodeTypes.length > 0) {
+      allParams.push(...options.nodeTypes);
+    }
+    allParams.push(limit);
+
+    try {
+      return this.db.prepare(sql).all(...allParams);
+    } catch (err) {
+      console.warn('[indexer] graphTraverse failed:', err.message);
+      return [];
+    }
+  }
+
+  /**
+   * Search graph nodes using FTS5.
+   *
+   * @param {string} query
+   * @param {Object} [options]
+   * @param {string[]} [options.nodeTypes] - Filter by node type
+   * @param {number} [options.limit=10]
+   * @returns {Array<Object>}
+   */
+  searchGraphNodes(query, options = {}) {
+    const ftsQuery = sanitiseFtsQuery(query);
+    if (!ftsQuery) return [];
+
+    const limit = options.limit ?? 10;
+    const conditions = [`graph_nodes_fts MATCH ?`, `n.status = 'active'`];
+    const params = [ftsQuery];
+
+    if (Array.isArray(options.nodeTypes) && options.nodeTypes.length > 0) {
+      const placeholders = options.nodeTypes.map(() => '?').join(', ');
+      conditions.push(`n.node_type IN (${placeholders})`);
+      params.push(...options.nodeTypes);
+    }
+
+    params.push(limit);
+
+    const sql = `
+      SELECT n.*, bm25(graph_nodes_fts) AS rank
+      FROM graph_nodes_fts
+      JOIN graph_nodes n ON n.id = graph_nodes_fts.id
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY rank
+      LIMIT ?
     `;
 
     return this.db.prepare(sql).all(...params);
