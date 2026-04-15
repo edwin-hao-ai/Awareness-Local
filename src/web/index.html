@@ -1896,6 +1896,7 @@ function renderSkillCard(s) {
 
   return `<div class="card-box skill-card">
     <span class="skill-pin${pinned?' pinned':''}" onclick="toggleSkillPin('${esc(s.id)}',${pinned?0:1})" title="${pinned?'Unpin':'Pin'}">${pinned?'&#128204;':'&#128205;'}</span>
+    <a class="skill-export" href="/api/v1/skills/${encodeURIComponent(s.id)}/export?format=skillmd" download title="Export as SKILL.md" style="position:absolute;top:8px;right:36px;font-size:0.85rem;text-decoration:none;color:var(--text-muted);cursor:pointer" onclick="event.stopPropagation()">&#128190;</a>
     <div class="skill-card-name">${esc(s.name || 'Untitled')}</div>
     <div class="skill-card-summary">${esc(s.summary || '')}</div>
     <div class="skill-decay-bar"><div class="skill-decay-fill" style="width:${decayPct}%;background:${decayColor}"></div></div>

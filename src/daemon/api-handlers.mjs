@@ -136,6 +136,13 @@ export async function handleApiRoute(daemon, req, res, url) {
     return apiMarkSkillUsed(daemon, req, res, skillId);
   }
 
+  if (route.startsWith('/skills/') && route.endsWith('/export') && req.method === 'GET') {
+    const skillId = decodeURIComponent(
+      route.replace('/skills/', '').replace('/export', '')
+    );
+    return apiExportSkill(daemon, req, res, skillId, url);
+  }
+
   if (route.startsWith('/skills/') && req.method === 'PUT') {
     const skillId = decodeURIComponent(route.replace('/skills/', ''));
     return apiUpdateSkill(daemon, req, res, skillId);
@@ -708,6 +715,50 @@ export function apiMarkSkillUsed(daemon, _req, res, skillId) {
   } catch {
     return jsonResponse(res, { error: 'Skills table not available' }, 503);
   }
+}
+
+export async function apiExportSkill(daemon, _req, res, skillId, url) {
+  const format = (url?.searchParams?.get('format') || 'skillmd').toLowerCase();
+  if (format !== 'skillmd' && format !== 'md' && format !== 'markdown') {
+    return jsonResponse(res, { error: `Unsupported format '${format}'. Use format=skillmd.` }, 400);
+  }
+  if (!daemon.indexer) {
+    return jsonResponse(res, { error: 'Indexer not available' }, 503);
+  }
+
+  let row;
+  try {
+    row = daemon.indexer.db
+      .prepare('SELECT * FROM skills WHERE id = ?')
+      .get(skillId);
+  } catch {
+    return jsonResponse(res, { error: 'Skills table not available' }, 503);
+  }
+  if (!row) return jsonResponse(res, { error: 'Skill not found' }, 404);
+
+  // Rehydrate JSON-encoded columns.
+  const parse = (s, fallback) => {
+    try { return JSON.parse(s); } catch { return fallback; }
+  };
+  const skill = {
+    name: row.name,
+    summary: row.summary,
+    methods: Array.isArray(row.methods) ? row.methods : parse(row.methods, []),
+    trigger_conditions: Array.isArray(row.trigger_conditions)
+      ? row.trigger_conditions
+      : parse(row.trigger_conditions, []),
+    tags: Array.isArray(row.tags) ? row.tags : parse(row.tags, []),
+  };
+
+  const { buildSkillMd } = await import('../core/skill-md-formatter.mjs');
+  const { slug, content } = buildSkillMd(skill);
+
+  res.writeHead(200, {
+    'Content-Type': 'text/markdown; charset=utf-8',
+    'Content-Disposition': `attachment; filename="${slug}.skill.md"`,
+    'Cache-Control': 'no-store',
+  });
+  res.end(content);
 }
 
 export async function apiUpdateSkill(daemon, req, res, skillId) {

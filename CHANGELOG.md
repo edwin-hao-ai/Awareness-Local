@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.6.4] - 2026-04-15
+
+### Added — Skill export (F-032 extension)
+- **`GET /api/v1/skills/<id>/export?format=skillmd`** — downloads the
+  skill as an OpenClaw / Claude Code compatible `SKILL.md` file.
+  Response includes `Content-Type: text/markdown`, `Content-Disposition:
+  attachment; filename="<slug>.skill.md"`.
+- **Dashboard download icon (💾)** on each skill card in the Wiki →
+  Skills view. One click → browser saves `<slug>.skill.md`.
+- **Spec-compliant formatter** (`src/core/skill-md-formatter.mjs`):
+  frontmatter is exactly `name` + `description` (no extra keys, per
+  Claude/OpenClaw spec research). Description is pushy ("Does X. Use
+  when …"). Body uses imperative-voice section headings chosen to
+  match our data shape (`## When to use this skill` + `## How to apply`
+  numbered list with optional `(use <tool>)` hints).
+- 16 unit tests for the formatter (slug sanitization, description
+  length cap, frontmatter key parity, empty-section handling).
+- 3 zero-mock user-journey specs (happy / 404 / 400) proving the real
+  browser download experience.
+
+### Process (ship-gate methodology in action)
+- Wrote `docs/features/f-032-skills-export/ACCEPTANCE.md` BEFORE
+  coding, including research notes from fetching
+  `anthropics/skills` and `openclaw/openclaw` real SKILL.md files.
+- `verify-endpoints.mjs` (L1) caught the new route automatically.
+- Zero-mock journey spec added to `test/e2e/user-journeys/`.
+- `scripts/ship-gate.sh` green before publish.
+
 ## [0.6.3] - 2026-04-15
 
 ### Fixed
