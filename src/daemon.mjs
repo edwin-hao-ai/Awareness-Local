@@ -57,6 +57,7 @@ import { startFileWatcher, startWorkspaceWatcher, startGitHeadWatcher } from './
 import { scanWorkspace, indexWorkspaceFiles, getGitChanges, getCurrentCommit, isGitRepo, markDeletedFiles, handleRenamedFiles } from './core/workspace-scanner.mjs';
 import { loadScanState, saveScanState, createScanState, updateScanState, appendScanError } from './core/scan-state.mjs';
 import { loadScanConfig } from './core/scan-config.mjs';
+import { initTelemetry, getTelemetry } from './core/telemetry.mjs';
 import { loadGitignoreRules } from './core/gitignore-parser.mjs';
 import { classifyFile } from './core/scan-defaults.mjs';
 import {
@@ -65,6 +66,7 @@ import {
   extractAndIndex,
   warmupEmbedder,
 } from './daemon/embedding-helpers.mjs';
+import { runGraphEmbeddingPipeline } from './daemon/graph-embedder.mjs';
 
 // Read version from package.json (not hardcoded)
 const __daemon_dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -306,6 +308,23 @@ export class AwarenessLocalDaemon {
       lookup: (params) => this._lookup(params),
     });
 
+    // ---- Telemetry (opt-in) ----
+    try {
+      const cfg = this._loadConfig();
+      initTelemetry({ config: cfg, projectDir: this.projectDir, version: PKG_VERSION });
+      const tel = getTelemetry();
+      tel?.track('daemon_started', {
+        daemon_version: PKG_VERSION,
+        os: process.platform,
+        node_version: process.version,
+        arch: process.arch,
+        locale: (Intl.DateTimeFormat().resolvedOptions().locale) || 'unknown',
+      });
+    } catch (err) {
+      // Never let telemetry init block daemon startup.
+      console.warn('[awareness-local] telemetry init failed:', err.message);
+    }
+
     // ---- Cloud sync (optional) ----
     const config = this._loadConfig();
     if (config.cloud?.enabled) {
@@ -510,7 +529,7 @@ export class AwarenessLocalDaemon {
 
       // / — Web Dashboard
       if (url.pathname === '/' || url.pathname.startsWith('/web')) {
-        return this._handleWebUI(res);
+        return this._handleWebUI(res, url.pathname);
       }
 
       // 404
@@ -605,8 +624,8 @@ export class AwarenessLocalDaemon {
   /**
    * Serve the web dashboard SPA from web/index.html.
    */
-  _handleWebUI(res) {
-    return handleWebUi(res, import.meta.url);
+  _handleWebUI(res, pathname = '/') {
+    return handleWebUi(res, import.meta.url, pathname);
   }
 
   // -----------------------------------------------------------------------
@@ -742,8 +761,13 @@ export class AwarenessLocalDaemon {
       });
     }
 
-    // Lifecycle: auto-resolve tasks/risks, garbage collect (fire-and-forget, <30ms)
-    const lifecycle = runLifecycleChecks(this.indexer, params.content, title, params.insights);
+    // Lifecycle: auto-resolve tasks/risks, garbage collect (fire-and-forget, hybrid FTS5+embedding)
+    const lifecycleOpts = {};
+    if (this._embedder) {
+      lifecycleOpts.embedFn = (text, type) => this._embedder.embed(text, type);
+      lifecycleOpts.cosineFn = this._embedder.cosineSimilarity;
+    }
+    const lifecycle = await runLifecycleChecks(this.indexer, params.content, title, params.insights, lifecycleOpts);
 
     // Perception: surface signals the agent didn't ask about (Eywa Whisper)
     const perception = this._buildPerception(params.content, title, memory, params.insights);
@@ -1789,6 +1813,7 @@ ${item.description || item.title || ''}
       let totalFiles = 0;
       let totalCodeFiles = 0;
       let totalDocFiles = 0;
+      let totalSymbols = 0;
       try {
         totalFiles = this.indexer.db.prepare(
           "SELECT count(*) AS c FROM graph_nodes WHERE node_type = 'file' AND status = 'active'"
@@ -1798,6 +1823,9 @@ ${item.description || item.title || ''}
         ).get().c;
         totalDocFiles = this.indexer.db.prepare(
           "SELECT count(*) AS c FROM graph_nodes WHERE node_type = 'file' AND status = 'active' AND json_extract(metadata, '$.category') = 'docs'"
+        ).get().c;
+        totalSymbols = this.indexer.db.prepare(
+          "SELECT count(*) AS c FROM graph_nodes WHERE node_type = 'symbol' AND status = 'active'"
         ).get().c;
       } catch { /* stats are non-critical */ }
 
@@ -1810,6 +1838,7 @@ ${item.description || item.title || ''}
         total_files: totalFiles,
         total_code_files: totalCodeFiles,
         total_doc_files: totalDocFiles,
+        total_symbols: totalSymbols,
         scan_duration_ms: duration,
         [scanType]: new Date().toISOString(),
       });
@@ -1823,6 +1852,12 @@ ${item.description || item.title || ''}
         );
       }
 
+      // Fire-and-forget: embed graph nodes + generate similarity edges
+      // Runs in background after scan completes — does not block return
+      if (result.indexed > 0 && this._embedder) {
+        this._triggerGraphEmbedding();
+      }
+
       return result;
     } catch (err) {
       this.scanState = appendScanError(
@@ -1833,6 +1868,50 @@ ${item.description || item.title || ''}
       console.error('[workspace-scanner] scan error:', err.message);
       return { indexed: 0, skipped: 0, errors: 1, edges: 0 };
     }
+  }
+
+  // -----------------------------------------------------------------------
+  // Graph Embedding (Phase 5 T-030)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Run graph embedding pipeline in background.
+   * Updates ScanState with embedding progress.
+   */
+  _triggerGraphEmbedding() {
+    // Update state to show embedding phase
+    this.scanState = updateScanState(this.scanState, {
+      status: 'indexing',
+      phase: 'embedding',
+      embed_total: 0,
+      embed_done: 0,
+    });
+
+    runGraphEmbeddingPipeline(this, {
+      onProgress: (done, total) => {
+        this.scanState = updateScanState(this.scanState, {
+          embed_total: total,
+          embed_done: done,
+        });
+      },
+    })
+      .then(({ embedding, similarity }) => {
+        this.scanState = updateScanState(this.scanState, {
+          status: 'idle',
+          phase: null,
+          embed_total: embedding.total,
+          embed_done: embedding.embedded,
+        });
+        saveScanState(this.projectDir, this.scanState);
+      })
+      .catch((err) => {
+        console.warn('[graph-embedder] pipeline error:', err.message);
+        this.scanState = updateScanState(this.scanState, {
+          status: 'idle',
+          phase: null,
+        });
+        saveScanState(this.projectDir, this.scanState);
+      });
   }
 
   // -----------------------------------------------------------------------

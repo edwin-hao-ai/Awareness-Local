@@ -87,6 +87,22 @@ export function buildInitResult({
   // Build lightweight perception signals for init (staleness + pitfall guards)
   const initPerception = _buildInitPerception(indexer, allActiveCards);
 
+  // Workspace project summary (if scanned)
+  let workspaceSummary = null;
+  try {
+    const graphCounts = indexer.db.prepare(
+      `SELECT node_type, COUNT(*) as count FROM graph_nodes WHERE status = 'active' GROUP BY node_type`
+    ).all();
+    const edgeCount = indexer.db.prepare(`SELECT COUNT(*) as count FROM graph_edges`).get();
+    if (graphCounts.length > 0) {
+      workspaceSummary = {
+        nodes: Object.fromEntries(graphCounts.map(r => [r.node_type, r.count])),
+        edges: edgeCount?.count || 0,
+        scanned: true,
+      };
+    }
+  } catch { /* graph tables may not exist yet */ }
+
   const initResult = {
     session_id: session.id,
     mode: 'local',
@@ -101,6 +117,7 @@ export function buildInitResult({
     agent_profiles: [],
     active_skills: activeSkills,
     setup_hints: [],
+    workspace_summary: workspaceSummary,
   };
 
   try {

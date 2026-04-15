@@ -93,6 +93,11 @@ CREATE TABLE IF NOT EXISTS tasks (
   synced_to_cloud INTEGER DEFAULT 0
 );
 
+CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(
+  id UNINDEXED, title, description,
+  tokenize='trigram'
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   source TEXT,
@@ -359,6 +364,7 @@ export class Indexer {
     this._migrateGraphSchema();
     // F-038 T-005.5: Add recall_count to knowledge_cards
     this._migrateRecallCount();
+    this._migrateGraphNodesSyncHash();
   }
 
   /**
@@ -476,6 +482,17 @@ export class Indexer {
   _migrateRecallCount() {
     try {
       this.db.exec('ALTER TABLE knowledge_cards ADD COLUMN recall_count INTEGER DEFAULT 0');
+    } catch {
+      // Column already exists — expected on subsequent runs
+    }
+  }
+
+  /**
+   * F-038 T-023: Add sync_hash column to graph_nodes for cloud sync dedup.
+   */
+  _migrateGraphNodesSyncHash() {
+    try {
+      this.db.exec('ALTER TABLE graph_nodes ADD COLUMN sync_hash TEXT');
     } catch {
       // Column already exists — expected on subsequent runs
     }
@@ -687,6 +704,28 @@ export class Indexer {
     this._stmtGetAllEmbeddings = this.db.prepare(
       `SELECT memory_id, vector, model_id FROM embeddings`
     );
+
+    // -- graph_embeddings ---------------------------------------------------
+    this._stmtUpsertGraphEmbedding = this.db.prepare(`
+      INSERT OR REPLACE INTO graph_embeddings (node_id, vector, model_id, created_at)
+      VALUES (@node_id, @vector, @model_id, @created_at)
+    `);
+
+    this._stmtGetGraphEmbedding = this.db.prepare(
+      `SELECT vector, model_id FROM graph_embeddings WHERE node_id = ?`
+    );
+
+    this._stmtGetAllGraphEmbeddings = this.db.prepare(
+      `SELECT node_id, vector, model_id FROM graph_embeddings`
+    );
+
+    this._stmtUnembeddedGraphNodes = this.db.prepare(`
+      SELECT g.id, g.node_type, g.title, substr(g.content, 1, 2000) AS content
+      FROM graph_nodes g
+      WHERE g.status = 'active'
+        AND g.id NOT IN (SELECT node_id FROM graph_embeddings)
+      ORDER BY g.node_type, g.id
+    `);
   }
 
   // -----------------------------------------------------------------------
@@ -1023,6 +1062,16 @@ Return ONLY JSON: {"title": "...", "summary": "..."}`;
       updated_at: task.updated_at || now,
       filepath: task.filepath,
     });
+
+    // Sync FTS5 index (DELETE + INSERT since FTS5 doesn't support UPSERT)
+    try {
+      this.db.prepare('DELETE FROM tasks_fts WHERE id = ?').run(task.id);
+      this.db
+        .prepare('INSERT INTO tasks_fts (id, title, description) VALUES (?, ?, ?)')
+        .run(task.id, task.title, task.description || '');
+    } catch {
+      // tasks_fts may not exist on older DBs — non-fatal
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -1667,6 +1716,73 @@ Return ONLY JSON: {"title": "...", "summary": "..."}`;
         row.vector.byteLength / Float32Array.BYTES_PER_ELEMENT
       ),
     }));
+  }
+
+  // -----------------------------------------------------------------------
+  // Graph embeddings (T-030)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Store (or replace) an embedding vector for a graph node.
+   *
+   * @param {string} nodeId — graph_nodes.id (e.g. 'file:src/index.ts')
+   * @param {Float32Array} vector — 384-dimensional embedding.
+   * @param {string} modelId — e.g. 'all-MiniLM-L6-v2'.
+   */
+  storeGraphEmbedding(nodeId, vector, modelId) {
+    const buf = Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
+    this._stmtUpsertGraphEmbedding.run({
+      node_id: nodeId,
+      vector: buf,
+      model_id: modelId,
+      created_at: nowISO(),
+    });
+  }
+
+  /**
+   * Retrieve the embedding vector for a single graph node.
+   *
+   * @param {string} nodeId
+   * @returns {{ vector: Float32Array, model_id: string } | null}
+   */
+  getGraphEmbedding(nodeId) {
+    const row = this._stmtGetGraphEmbedding.get(nodeId);
+    if (!row) return null;
+    return {
+      vector: new Float32Array(
+        row.vector.buffer,
+        row.vector.byteOffset,
+        row.vector.byteLength / Float32Array.BYTES_PER_ELEMENT
+      ),
+      model_id: row.model_id,
+    };
+  }
+
+  /**
+   * Retrieve all graph embeddings (for brute-force similarity search).
+   *
+   * @returns {Array<{ node_id: string, vector: Float32Array, model_id: string }>}
+   */
+  getAllGraphEmbeddings() {
+    const rows = this._stmtGetAllGraphEmbeddings.all();
+    return rows.map((row) => ({
+      node_id: row.node_id,
+      model_id: row.model_id || '',
+      vector: new Float32Array(
+        row.vector.buffer,
+        row.vector.byteOffset,
+        row.vector.byteLength / Float32Array.BYTES_PER_ELEMENT
+      ),
+    }));
+  }
+
+  /**
+   * List graph nodes that do not yet have embeddings.
+   *
+   * @returns {Array<{ id: string, node_type: string, title: string, content: string }>}
+   */
+  getUnembeddedGraphNodes() {
+    return this._stmtUnembeddedGraphNodes.all();
   }
 
   // -----------------------------------------------------------------------

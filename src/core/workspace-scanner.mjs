@@ -19,6 +19,11 @@ import { execSync } from 'node:child_process';
 import { loadGitignoreRules } from './gitignore-parser.mjs';
 import { isExcludedDir, isExcludedFile, isSensitiveFile, classifyFile } from './scan-defaults.mjs';
 import { loadScanConfig } from './scan-config.mjs';
+import { detectLanguage } from './lang-detect.mjs';
+import { extractFile } from './parsers/index.mjs';
+import { convertToMarkdown, isConvertible } from './doc-converter.mjs';
+import { discoverLinks } from './link-discovery.mjs';
+import { generateWikiPages } from './wiki-generator.mjs';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -384,12 +389,28 @@ export async function indexWorkspaceFiles(files, indexer, options = {}) {
           continue;
         }
 
+        // For convertible files (PDF/DOCX/Excel/CSV/TXT), auto-convert to markdown
+        let nodeContent = content.slice(0, 8000); // default cap
+        if (file.category === 'convertible' && isConvertible(file.relativePath)) {
+          try {
+            const docsDir = options.documentsDir || path.join(options.projectDir || '.', '.awareness', 'documents');
+            const convResult = await convertToMarkdown(file.absolutePath, docsDir);
+            if (convResult.success && !convResult.skipped && convResult.outputPath) {
+              const converted = fs.readFileSync(convResult.outputPath, 'utf8');
+              nodeContent = converted.slice(0, 8000);
+              result.converted = (result.converted || 0) + 1;
+            }
+          } catch (convErr) {
+            console.warn(`[workspace-scanner] convert error for ${file.relativePath}:`, convErr.message);
+          }
+        }
+
         // Insert/update graph node
         indexer.graphInsertNode({
           id: nodeId,
-          node_type: 'file',
+          node_type: file.category === 'convertible' ? 'doc' : 'file',
           title: path.basename(file.relativePath),
-          content: content.slice(0, 8000), // Cap content in DB
+          content: nodeContent,
           content_hash: hash,
           metadata: {
             relativePath: file.relativePath,
@@ -401,12 +422,57 @@ export async function indexWorkspaceFiles(files, indexer, options = {}) {
 
         result.indexed++;
 
-        // Extract imports for edge creation
-        const imports = extractImports(content, file.category);
-        for (const imp of imports) {
-          const targetId = resolveImportToNodeId(imp, file.relativePath, knownPaths);
-          if (targetId) {
-            pendingEdges.push({ from: nodeId, to: targetId, importPath: imp });
+        // Detect language and extract symbols + imports via parser
+        const firstLine = content.split('\n')[0] || '';
+        const langInfo = detectLanguage(file.relativePath, firstLine);
+        const language = langInfo?.language || null;
+
+        if (language && file.category === 'code') {
+          const { symbols, imports: parsedImports } = extractFile(content, language);
+
+          // Write symbols as graph_nodes (node_type='symbol')
+          for (const sym of symbols) {
+            if (sym.symbol_type === 'annotation') continue; // skip TODO/FIXME for graph
+            const symId = `sym:${file.relativePath}:${sym.name}:${sym.line_start}`;
+            indexer.graphInsertNode({
+              id: symId,
+              node_type: 'symbol',
+              title: sym.name,
+              content: sym.signature + (sym.doc_comment ? '\n' + sym.doc_comment : ''),
+              metadata: {
+                symbol_type: sym.symbol_type,
+                signature: sym.signature,
+                line_start: sym.line_start,
+                exported: sym.exported,
+                language,
+                file: file.relativePath,
+              },
+            });
+            // 'contains' edge: file → symbol
+            pendingEdges.push({
+              from: nodeId,
+              to: symId,
+              edgeType: 'contains',
+              importPath: null,
+            });
+            result.symbols = (result.symbols || 0) + 1;
+          }
+
+          // Use parser imports (more precise than old extractImports)
+          for (const imp of parsedImports) {
+            const targetId = resolveImportToNodeId(imp.path, file.relativePath, knownPaths);
+            if (targetId) {
+              pendingEdges.push({ from: nodeId, to: targetId, edgeType: 'import', importPath: imp.path });
+            }
+          }
+        } else {
+          // Fallback: old extractImports for non-code or unknown language
+          const imports = extractImports(content, file.category);
+          for (const imp of imports) {
+            const targetId = resolveImportToNodeId(imp, file.relativePath, knownPaths);
+            if (targetId) {
+              pendingEdges.push({ from: nodeId, to: targetId, edgeType: 'import', importPath: imp });
+            }
           }
         }
       } catch (err) {
@@ -431,19 +497,84 @@ export async function indexWorkspaceFiles(files, indexer, options = {}) {
     }
   }
 
-  // Second pass: create import edges
+  // Second pass: create edges (import + contains)
   for (const edge of pendingEdges) {
     if (options.signal?.aborted) break;
     try {
+      const metadata = edge.importPath ? { importPath: edge.importPath } : {};
       indexer.graphInsertEdge({
         from_node_id: edge.from,
         to_node_id: edge.to,
-        edge_type: 'import',
-        metadata: { importPath: edge.importPath },
+        edge_type: edge.edgeType || 'import',
+        metadata,
       });
       result.edges++;
     } catch {
       // Edge insert failures are non-critical
+    }
+  }
+
+  // Third pass: doc→code link discovery for markdown/doc files
+  if (!options.signal?.aborted) {
+    try {
+      const allNodes = indexer.db
+        .prepare("SELECT id, node_type, title FROM graph_nodes WHERE status = 'active'")
+        .all();
+      const docFiles = files.filter(f =>
+        f.category === 'docs' || f.category === 'convertible'
+      );
+      for (const file of docFiles) {
+        const nodeId = fileNodeId(file.relativePath);
+        const node = indexer.getGraphNode?.(nodeId);
+        if (!node || !node.content) continue;
+        const links = discoverLinks(node.content, allNodes);
+        for (const link of links) {
+          try {
+            indexer.graphInsertEdge({
+              from_node_id: nodeId,
+              to_node_id: link.targetId,
+              edge_type: 'doc_reference',
+              weight: link.confidence,
+              metadata: { refName: link.refName, refType: link.refType, line: link.line },
+            });
+            result.edges++;
+            result.docLinks = (result.docLinks || 0) + 1;
+          } catch { /* non-critical */ }
+        }
+      }
+    } catch (err) {
+      console.warn('[workspace-scanner] link discovery error:', err.message);
+    }
+  }
+
+  // Fourth pass: generate wiki pages and write to graph_nodes
+  if (!options.signal?.aborted) {
+    try {
+      const allNodes = indexer.db
+        .prepare("SELECT id, node_type, title, content, metadata FROM graph_nodes WHERE status = 'active'")
+        .all()
+        .map(n => ({ ...n, metadata: safeJsonParse(n.metadata) }));
+      const allEdges = indexer.db
+        .prepare('SELECT * FROM graph_edges')
+        .all();
+      // Knowledge cards from indexer (if available)
+      const cards = indexer.db.prepare?.('SELECT id, title, tags FROM knowledge_cards WHERE status != ?')
+        ?.all('superseded')
+        ?.map(c => ({ ...c, tags: safeJsonParse(c.tags) || [] })) || [];
+
+      const pages = generateWikiPages(allNodes, allEdges, cards);
+      for (const page of pages) {
+        indexer.graphInsertNode({
+          id: `wiki:${page.slug}`,
+          node_type: 'wiki',
+          title: page.title,
+          content: page.content.slice(0, 8000),
+          metadata: { slug: page.slug, pageType: page.pageType },
+        });
+        result.wikiPages = (result.wikiPages || 0) + 1;
+      }
+    } catch (err) {
+      console.warn('[workspace-scanner] wiki generation error:', err.message);
     }
   }
 
@@ -530,4 +661,14 @@ export function handleRenamedFiles(renames, indexer) {
  * @property {number} skipped
  * @property {number} errors
  * @property {number} edges
+ * @property {number} [docLinks]
+ * @property {number} [wikiPages]
+ * @property {number} [converted]
+ * @property {number} [symbols]
  */
+
+/** Safe JSON parse — returns null on failure. */
+function safeJsonParse(str) {
+  if (!str) return null;
+  try { return JSON.parse(str); } catch { return null; }
+}

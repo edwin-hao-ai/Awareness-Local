@@ -252,18 +252,29 @@ export class SearchEngine {
     // Hydrate results missing metadata (embedding-only results lack title/content)
     this._hydrateMetadata(merged);
 
+    // Workspace graph expansion: enrich results with related file/wiki/doc nodes
+    const workspaceExpanded = this._expandWithWorkspace(merged, semantic_query || keyword_query, 5);
+    const mergedWithWorkspace = workspaceExpanded.length > 0
+      ? [...merged, ...workspaceExpanded]
+      : merged;
+
     // Return summary format — full content, no truncation; control token budget via item count
-    const summaryResults = merged.map((r) => ({
-      id: r.id,
-      type: r.type || r.category || 'memory',
-      title: r.title || this._autoTitle(r.fts_content || r.content),
-      summary: r.summary || r.fts_content || r.content || '',
-      score: r.finalScore ?? r.rerankScore ?? r.mergedScore ?? 0,
-      tokens_est: Math.ceil((r.fts_content?.length || r.content?.length || 0) / 4),
-      tags: this._parseTags(r.tags),
-      created_at: r.created_at,
-      source: r.source || 'local',
-    }));
+    const summaryResults = mergedWithWorkspace.map((r) => {
+      const item = {
+        id: r.id,
+        type: r.type || r.category || 'memory',
+        title: r.title || this._autoTitle(r.fts_content || r.content),
+        summary: r.summary || r.fts_content || r.content || '',
+        score: r.finalScore ?? r.rerankScore ?? r.mergedScore ?? 0,
+        tokens_est: Math.ceil((r.fts_content?.length || r.content?.length || 0) / 4),
+        tags: this._parseTags(r.tags),
+        created_at: r.created_at,
+        source: r.source || 'local',
+      };
+      // Attach file_path for workspace results so callers can locate the file
+      if (r.file_path) item.file_path = r.file_path;
+      return item;
+    });
 
     if (Number.isFinite(normalizedParams.token_budget) && normalizedParams.token_budget > 0) {
       return this.contextBudgeter.apply(summaryResults, {
@@ -804,14 +815,17 @@ export class SearchEngine {
           return this.indexer.search?.(ftsQuery, { ...opts, scope }) || [];
 
         default: {
-          // 'all' — search both memories and knowledge, merge
-          const memLimit = Math.ceil((opts.limit || 10) * 0.6);
-          const kcLimit = Math.ceil((opts.limit || 10) * 0.4);
+          // 'all' — search memories, knowledge, and graph nodes
+          const totalLimit = opts.limit || 10;
+          const memLimit = Math.ceil(totalLimit * 0.5);
+          const kcLimit = Math.ceil(totalLimit * 0.3);
+          const graphLimit = Math.ceil(totalLimit * 0.2);
 
           const memResults = this.indexer.search?.(ftsQuery, { ...opts, limit: memLimit }) || [];
           const kcResults = this.indexer.searchKnowledge?.(ftsQuery, { ...opts, limit: kcLimit }) || [];
+          const graphResults = this._searchGraphNodesFts(ftsQuery, graphLimit);
 
-          return [...memResults, ...kcResults];
+          return [...memResults, ...kcResults, ...graphResults];
         }
       }
     } catch {
@@ -1018,6 +1032,125 @@ export class SearchEngine {
         if (!r.fts_content) r.fts_content = meta.fts_content || '';
       } catch { /* non-fatal */ }
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Internal: Graph / Workspace expansion
+  // -------------------------------------------------------------------------
+
+  /**
+   * Search graph_nodes via FTS5 and format results as unified search items.
+   *
+   * @param {string} ftsQuery - Sanitised FTS5 query
+   * @param {number} limit
+   * @returns {object[]}
+   */
+  _searchGraphNodesFts(ftsQuery, limit) {
+    try {
+      const raw = this.indexer.searchGraphNodes?.(ftsQuery, {
+        nodeTypes: ['file', 'wiki', 'doc', 'symbol'],
+        limit,
+      }) || [];
+      return raw.map((n) => this._graphNodeToResult(n, 'graph_fts'));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Expand merged recall results with related workspace nodes from the graph.
+   *
+   * Strategy:
+   *   1. Search graph_nodes using the original query for direct matches.
+   *   2. For each hit, traverse 1-hop similarity/doc_reference neighbours.
+   *   3. Deduplicate, cap at `maxExpand`, return as workspace-tagged results.
+   *
+   * The returned items are meant to be appended AFTER the primary results
+   * (lower implicit priority) and are clearly marked with source='workspace'.
+   *
+   * @param {object[]} merged   - Primary recall results (read-only)
+   * @param {string|null} query - Original user query
+   * @param {number} maxExpand  - Max workspace items to return
+   * @returns {object[]}
+   */
+  _expandWithWorkspace(merged, query, maxExpand = 5) {
+    if (!query || !this.indexer?.searchGraphNodes) return [];
+
+    try {
+      // Step 1: direct graph search using the original query
+      const directHits = this.indexer.searchGraphNodes(query, {
+        nodeTypes: ['file', 'wiki', 'doc'],
+        limit: maxExpand,
+      });
+      if (!directHits || directHits.length === 0) return [];
+
+      // Step 2: 1-hop neighbour expansion for each direct hit
+      const neighbourMap = new Map(); // id → node
+      for (const hit of directHits) {
+        neighbourMap.set(hit.id, hit);
+        if (this.indexer.graphTraverse) {
+          const neighbours = this.indexer.graphTraverse(hit.id, {
+            edgeTypes: ['similarity', 'doc_reference'],
+            maxDepth: 1,
+            limit: 3,
+          });
+          for (const nb of neighbours) {
+            if (!neighbourMap.has(nb.id)) {
+              neighbourMap.set(nb.id, nb);
+            }
+          }
+        }
+      }
+
+      // Step 3: exclude IDs already in primary results
+      const primaryIds = new Set(merged.map((r) => r.id));
+      const candidates = [...neighbourMap.values()].filter((n) => !primaryIds.has(n.id));
+
+      // Step 4: convert to unified format, cap at maxExpand
+      return candidates
+        .slice(0, maxExpand)
+        .map((n) => this._graphNodeToResult(n, 'workspace'));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Convert a graph_nodes row into a unified search result object.
+   *
+   * @param {object} node       - Row from graph_nodes table
+   * @param {string} sourceTag  - 'workspace' | 'graph_fts'
+   * @returns {object}
+   */
+  _graphNodeToResult(node, sourceTag) {
+    const nodeType = node.node_type || 'file';
+    const typeSuffix = nodeType === 'file' ? 'workspace_file'
+      : nodeType === 'wiki' ? 'workspace_wiki'
+      : nodeType === 'doc' ? 'workspace_doc'
+      : `workspace_${nodeType}`;
+
+    let meta = {};
+    try {
+      meta = typeof node.metadata === 'string' ? JSON.parse(node.metadata) : (node.metadata || {});
+    } catch { /* non-fatal */ }
+
+    const title = node.title || meta.file_path || '';
+    const content = node.content || '';
+
+    return {
+      id: node.id,
+      type: typeSuffix,
+      title,
+      summary: content.slice(0, 500),
+      fts_content: content,
+      content,
+      score: node.salience_score ?? Math.abs(node.rank ?? 0.2),
+      finalScore: node.salience_score ?? Math.abs(node.rank ?? 0.2),
+      tags: meta.language ? [meta.language] : [],
+      created_at: node.created_at || null,
+      source: sourceTag,
+      file_path: meta.file_path || null,
+    };
   }
 
   /**

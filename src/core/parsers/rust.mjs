@@ -51,7 +51,7 @@ export function extractRust(content) {
 
   // --- Function declarations ---
   // pub fn name(...) -> ... / fn name(...) / pub async fn name(...)
-  const funcRe = /^[ \t]*(pub(?:\(crate\))?\s+)?(async\s+)?(?:unsafe\s+)?fn\s+(\w+)(?:<[^>]*>)?\s*(\([^)]*\))(?:\s*->\s*([^\s{]+))?/gm;
+  const funcRe = /^[ \t]*(pub(?:\(crate\))?\s+)?(async\s+)?(?:unsafe\s+)?fn\s+(\w+)(?:<[^>]*>)?\s*(\([^)]*\))(?:\s*->\s*([^{]+?))?(?:\s*\{|$)/gm;
   while ((m = funcRe.exec(content)) !== null) {
     const line = lineNumber(content, m.index);
     const name = m[3];

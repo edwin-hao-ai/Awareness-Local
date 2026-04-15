@@ -277,5 +277,23 @@ export function getToolDefinitions() {
         required: ['skill_id'],
       },
     },
+    {
+      name: 'awareness_workspace_search',
+      description: 'Search workspace files, code symbols, and wiki pages in the current project. Use this to find code, documentation, and project structure.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search query (natural language or keywords)' },
+          node_types: {
+            type: 'array',
+            items: { type: 'string', enum: ['file', 'symbol', 'wiki', 'doc'] },
+            description: 'Filter by node type (default: all types)',
+          },
+          limit: { type: 'number', default: 10, maximum: 30 },
+          include_neighbors: { type: 'boolean', default: false, description: 'Include similar files via graph traversal' },
+        },
+        required: ['query'],
+      },
+    },
   ];
 }

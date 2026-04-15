@@ -74,28 +74,41 @@ export function apiScanFiles(daemon, _req, res, url) {
   const status = url.searchParams.get('status') || 'active';
 
   try {
-    let sql = 'SELECT id, node_type, title, content_hash, metadata, salience_score, recall_count, status, created_at, updated_at FROM graph_nodes WHERE node_type = ?';
-    const params = ['file'];
+    const columns = 'id, node_type, title, content_hash, metadata, salience_score, recall_count, status, created_at, updated_at';
+    let sql = '';
+    const params = [];
+
+    // Map category param to graph_nodes query
+    if (category === 'wiki') {
+      // Query wiki pages (node_type = 'wiki')
+      sql = `SELECT ${columns} FROM graph_nodes WHERE node_type = 'wiki'`;
+    } else if (category === 'docs') {
+      // Query doc files (file+docs) and converted documents (node_type='doc')
+      sql = `SELECT ${columns} FROM graph_nodes WHERE (node_type = 'file' AND json_extract(metadata, '$.category') = 'docs') OR node_type = 'doc'`;
+    } else if (category === 'code') {
+      sql = `SELECT ${columns} FROM graph_nodes WHERE node_type = 'file' AND json_extract(metadata, '$.category') = 'code'`;
+    } else if (category === 'config') {
+      sql = `SELECT ${columns} FROM graph_nodes WHERE node_type = 'file' AND json_extract(metadata, '$.category') = 'config'`;
+    } else {
+      // Default: all file-like nodes (file + doc + wiki)
+      sql = `SELECT ${columns} FROM graph_nodes WHERE node_type IN ('file', 'doc', 'wiki')`;
+    }
 
     if (status) {
       sql += ' AND status = ?';
       params.push(status);
     }
 
-    if (category) {
-      sql += " AND json_extract(metadata, '$.category') = ?";
-      params.push(category);
-    }
-
     if (q) {
-      // Use FTS5 for text search
-      const ftsResults = daemon.indexer.searchGraphNodes(q, { nodeTypes: ['file'], limit: limit + offset });
+      // Use FTS5 for text search — search across all node types
+      const nodeTypes = category === 'wiki' ? ['wiki'] : category === 'docs' ? ['file', 'doc'] : category === 'code' ? ['file'] : ['file', 'doc', 'wiki'];
+      const ftsResults = daemon.indexer.searchGraphNodes(q, { nodeTypes, limit: limit + offset });
       const ids = ftsResults.map(r => r.id);
       if (ids.length === 0) {
         return jsonResponse(res, { files: [], total: 0, limit, offset });
       }
       const placeholders = ids.map(() => '?').join(',');
-      sql = `SELECT id, node_type, title, content_hash, metadata, salience_score, recall_count, status, created_at, updated_at FROM graph_nodes WHERE id IN (${placeholders})`;
+      sql = `SELECT ${columns} FROM graph_nodes WHERE id IN (${placeholders})`;
       params.length = 0;
       params.push(...ids);
     }
@@ -137,8 +150,10 @@ export function apiScanFileDetail(daemon, _req, res, fileId) {
     return jsonResponse(res, { error: 'Indexer not available' }, 503);
   }
 
-  // Try with and without 'file:' prefix
-  const nodeId = fileId.startsWith('file:') ? fileId : 'file:' + fileId;
+  // Resolve node ID: if it already has a type prefix (file:/wiki:/doc:/sym:), use as-is.
+  // Otherwise, try 'file:' prefix as default.
+  const hasPrefix = /^(file|wiki|doc|sym):/.test(fileId);
+  const nodeId = hasPrefix ? fileId : 'file:' + fileId;
   const node = daemon.indexer.getGraphNode(nodeId);
 
   if (!node) {

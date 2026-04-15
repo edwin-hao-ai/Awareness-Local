@@ -168,7 +168,7 @@ export function extractPyImports(content) {
   }
 
   // import X, Y
-  const importRe = /^import\s+([\w.,\s]+)/gm;
+  const importRe = /^import\s+([\w.,\s]+?)$/gm;
   while ((m = importRe.exec(content)) !== null) {
     const modules = m[1].split(',').map(n => n.trim().split(/\s+as\s+/)[0].trim()).filter(Boolean);
     for (const mod of modules) {

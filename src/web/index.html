@@ -900,6 +900,8 @@ async function api(path, options) {
   try { const r = await fetch(API + path, options); if (!r.ok) throw new Error('HTTP ' + r.status); return await r.json(); } catch (e) { console.error('[api]', path, e); return null; }
 }
 function esc(s) { if (!s) return ''; return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+/** Escape a string for embedding in a single-quoted JS string inside an HTML onclick attribute. */
+function escJs(s) { if (!s) return ''; return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 /** Lightweight Markdown→HTML renderer. Zero dependencies.
  *  Supports: headings, bold, italic, inline code, code blocks, links, lists, hr, blockquotes, paragraphs. */
@@ -1033,8 +1035,26 @@ async function loadSidebarData() {
   sidebarData.perceptionCounts = perceptionsRes?.counts || {};
   if (statsRes) statsData = statsRes;
   updateStatsBar();
+
+  // Render sidebar and overview immediately with core data
   renderSidebar();
   navigate(selectedItem);
+
+  // Load workspace scanner data in background (non-blocking — may not be available)
+  // Re-renders sidebar once workspace data arrives
+  try {
+    const [wsCodeRes, wsDocsRes, wsWikiRes, wsScanRes] = await Promise.all([
+      api('/scan/files?category=code&limit=500'),
+      api('/scan/files?category=docs&limit=200'),
+      api('/scan/files?category=wiki&limit=300'),
+      api('/scan/status'),
+    ]);
+    sidebarData.wsCode = wsCodeRes?.files || [];
+    sidebarData.wsDocs = wsDocsRes?.files || [];
+    sidebarData.wsWiki = wsWikiRes?.files || [];
+    sidebarData.scanStatus = wsScanRes || null;
+    renderSidebar(document.getElementById('sidebar-filter')?.value || '');
+  } catch (e) { console.warn('[workspace] scan data load failed:', e); }
 }
 
 function renderSidebar(filter = '') {
@@ -1101,6 +1121,73 @@ function renderSidebar(filter = '') {
   html += sidebarGroup('timeline', '&#128197;', t('sidebar.timeline'), sidebarData.timeline.length, sidebarCollapsed.timeline ?? true,
     tl.map(d => sidebarItem('timeline_day', d.date, d.date, d.count)).join(''));
 
+  // ── Workspace Scanner sections ──
+  const wsCode = sidebarData.wsCode || [];
+  const wsDocs = sidebarData.wsDocs || [];
+  const wsWiki = sidebarData.wsWiki || [];
+  if (wsCode.length > 0 || wsDocs.length > 0 || wsWiki.length > 0) {
+    // Project divider
+    html += `<div style="display:flex;align-items:center;gap:8px;padding:10px 14px 4px">
+      <div style="flex:1;height:1px;background:var(--border)"></div>
+      <span style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.15em;color:var(--text-muted)">Project</span>
+      <div style="flex:1;height:1px;background:var(--border)"></div>
+    </div>`;
+
+    // Code files grouped by top-level directory
+    const filteredCode = wsCode.filter(file => !f || (file.relativePath || file.title || '').toLowerCase().includes(f));
+    const codeDirs = {};
+    for (const file of filteredCode) {
+      const rel = file.relativePath || file.title || '';
+      const parts = rel.split('/');
+      const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : '(root)';
+      if (!codeDirs[dir]) codeDirs[dir] = [];
+      codeDirs[dir].push(file);
+    }
+    const dirEntries = Object.entries(codeDirs).sort(([a],[b]) => a.localeCompare(b));
+    let codeItems = '';
+    for (const [dir, files] of dirEntries.slice(0, 30)) {
+      codeItems += `<div class="sb-item" style="padding-left:28px;color:var(--text-muted);font-size:0.75rem;cursor:default">
+        <span style="margin-right:4px">&#128193;</span> ${esc(dir)} <span class="sb-item-badge">${files.length}</span>
+      </div>`;
+      for (const file of files.slice(0, 10)) {
+        const fileName = (file.relativePath || file.title).split('/').pop();
+        codeItems += sidebarItem('ws_file', file.id, fileName, null, 'var(--cyan)');
+      }
+    }
+    html += sidebarGroupClickable('ws_code', '&#128187;', 'Code', filteredCode.length, 'ws_code_list', sidebarCollapsed.ws_code ?? true, codeItems);
+
+    // Docs
+    const filteredDocs = wsDocs.filter(file => !f || (file.relativePath || file.title || '').toLowerCase().includes(f));
+    html += sidebarGroupClickable('ws_docs', '&#128196;', 'Docs', filteredDocs.length, 'ws_docs_list', sidebarCollapsed.ws_docs ?? true,
+      filteredDocs.slice(0, 30).map(doc => {
+        const name = (doc.relativePath || doc.title).split('/').pop();
+        return sidebarItem('ws_doc', doc.id, name || doc.title, null, 'var(--yellow)');
+      }).join(''));
+
+    // Wiki pages
+    const filteredWiki = wsWiki.filter(page => !f || (page.title || '').toLowerCase().includes(f));
+    const modulePages = filteredWiki.filter(p => p.id?.startsWith('wiki:modules/'));
+    const conceptPages = filteredWiki.filter(p => p.id?.startsWith('wiki:concepts/'));
+    let wikiItems = '';
+    if (modulePages.length > 0) {
+      wikiItems += `<div class="sb-item" style="padding-left:28px;color:var(--text-muted);font-size:0.75rem;cursor:default">
+        &#128211; Modules <span class="sb-item-badge">${modulePages.length}</span>
+      </div>`;
+      for (const p of modulePages.slice(0, 20)) {
+        wikiItems += sidebarItem('wiki_page', p.id, p.title || p.id, null, 'var(--blue)');
+      }
+    }
+    if (conceptPages.length > 0) {
+      wikiItems += `<div class="sb-item" style="padding-left:28px;color:var(--text-muted);font-size:0.75rem;cursor:default">
+        &#128215; Concepts <span class="sb-item-badge">${conceptPages.length}</span>
+      </div>`;
+      for (const p of conceptPages.slice(0, 20)) {
+        wikiItems += sidebarItem('wiki_page', p.id, p.title || p.id, null, 'var(--purple)');
+      }
+    }
+    html += sidebarGroupClickable('ws_wiki', '&#128214;', 'Wiki Pages', filteredWiki.length, 'ws_wiki_list', sidebarCollapsed.ws_wiki ?? false, wikiItems);
+  }
+
   document.getElementById('sidebar-scroll').innerHTML = html;
 }
 
@@ -1117,11 +1204,27 @@ function sidebarGroup(id, icon, label, count, collapsed, itemsHtml) {
   </div>`;
 }
 
+/** Sidebar group with a clickable header that navigates to a list view */
+function sidebarGroupClickable(id, icon, label, count, navType, collapsed, itemsHtml) {
+  const cls = collapsed ? ' collapsed' : '';
+  const isActive = selectedItem.type === navType;
+  return `<div class="sb-group${cls}" id="sb-grp-${id}">
+    <div class="sb-group-header" style="gap:4px">
+      <span class="sb-group-icon">${icon}</span>
+      <span class="sb-group-label" style="cursor:pointer;${isActive ? 'color:var(--accent);font-weight:600' : ''}" onclick="event.stopPropagation();navigate({type:'${navType}'})">${esc(label)}</span>
+      <span class="sb-group-count">${count}</span>
+      <span class="sb-group-chevron" style="cursor:pointer" onclick="event.stopPropagation();this.parentElement.parentElement.classList.toggle('collapsed');sidebarCollapsed['${id}']=this.parentElement.parentElement.classList.contains('collapsed')">&#9660;</span>
+    </div>
+    <div class="sb-group-items">${itemsHtml || '<div style="padding:6px 14px 6px 40px;font-size:0.78rem;color:var(--text-muted)">None</div>'}</div>
+  </div>`;
+}
+
 function sidebarItem(type, id, label, badge, dotColor) {
   const active = selectedItem.type === type && (selectedItem.id === id || selectedItem.date === id) ? ' active' : '';
   const dot = dotColor ? `<span class="sb-item-dot" style="background:${dotColor}"></span>` : '';
   const bdg = badge != null ? `<span class="sb-item-badge">${badge}</span>` : '';
-  const clickData = type === 'timeline_day' ? `{type:'${type}',date:'${esc(id)}'}` : `{type:'${type}',id:'${esc(id)}'}`;
+  const safeId = escJs(id);
+  const clickData = type === 'timeline_day' ? `{type:'${type}',date:'${safeId}'}` : `{type:'${type}',id:'${safeId}'}`;
   return `<div class="sb-item${active}" onclick="navigate(${clickData})">${dot}<span class="sb-item-label">${esc(label)}</span>${bdg}</div>`;
 }
 
@@ -1167,6 +1270,12 @@ function navigate(item) {
     case 'skills': renderSkillsView(area); break;
     case 'memory': renderMemoryDetail(area, item.id); break;
     case 'perceptions': renderPerceptionCenter(area); break;
+    case 'ws_file': renderWorkspaceFile(area, item.id); break;
+    case 'ws_doc': renderWorkspaceDoc(area, item.id); break;
+    case 'wiki_page': renderWikiPage(area, item.id); break;
+    case 'ws_code_list': renderWorkspaceList(area, 'code'); break;
+    case 'ws_docs_list': renderWorkspaceList(area, 'docs'); break;
+    case 'ws_wiki_list': renderWorkspaceList(area, 'wiki'); break;
     default: area.innerHTML = '<div class="empty-state"><p>Select an item from the sidebar.</p></div>';
   }
 }
@@ -1214,6 +1323,26 @@ function renderOverview(area) {
   html += statCard(totalSkills, t('stats.active_skills'));
   html += statCard(openTasks, t('stats.open_tasks'));
   html += '</div>';
+
+  // Workspace scan + embedding status bar
+  const ss = sidebarData.scanStatus;
+  if (ss && ss.status !== 'idle') {
+    const phase = ss.phase || ss.status;
+    const isEmbed = phase === 'embedding';
+    const pct = isEmbed && ss.embed_total > 0
+      ? Math.round((ss.embed_done / ss.embed_total) * 100)
+      : (ss.index_total > 0 ? Math.round((ss.index_done / ss.index_total) * 100) : null);
+    const detail = isEmbed
+      ? `Embedding: ${ss.embed_done || 0} / ${ss.embed_total || '?'}`
+      : `${phase}: ${ss.index_done || 0} / ${ss.index_total || '?'}`;
+    html += `<div style="background:linear-gradient(90deg,rgba(56,189,248,0.06),rgba(56,189,248,0.02));border:1px solid rgba(56,189,248,0.2);border-radius:var(--radius);padding:10px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px">
+      <span style="font-size:0.9rem;animation:spin 1s linear infinite">&#9881;</span>
+      <div style="flex:1">
+        <div style="font-size:0.82rem;font-weight:500;color:var(--text-primary)">${esc(detail)}</div>
+        ${pct !== null ? `<div style="height:3px;border-radius:2px;background:var(--bg-tertiary);margin-top:4px;overflow:hidden"><div style="height:100%;border-radius:2px;background:var(--accent);width:${pct}%;transition:width 0.3s"></div></div>` : ''}
+      </div>
+    </div>`;
+  }
 
   // Topics grid
   if (sidebarData.topics.length > 0) {
@@ -1375,6 +1504,28 @@ async function renderCardDetail(area, cardId) {
       </div>`;
     }
     html += '</div>';
+  }
+
+  // MOC member cards
+  if (c.members && c.members.length > 0) {
+    html += `<div style="margin-top:24px"><div class="section-title" style="margin-bottom:8px">Member Cards <span class="badge badge-cat">${c.members.length}</span></div>`;
+    html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">';
+    for (const m of c.members) {
+      const mConf = m.confidence != null ? Math.round(m.confidence * 100) + '%' : '';
+      html += `<div style="display:flex;align-items:flex-start;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);cursor:pointer"
+        onclick="navigate({type:'card',id:'${esc(m.id)}'})">
+        ${catBadge(m.category)}
+        <div style="flex:1;min-width:0">
+          <div style="font-size:0.82rem;font-weight:500">${esc(m.title || 'Untitled')}</div>
+          <div style="font-size:0.75rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((m.summary || '').substring(0, 120))}</div>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
+          ${growthBadge(m.growth_stage)}
+          ${mConf ? `<span class="badge badge-confidence ${confClass(m.confidence)}" style="font-size:0.68rem">${mConf}</span>` : ''}
+        </div>
+      </div>`;
+    }
+    html += '</div></div>';
   }
 
   // Tags
@@ -1753,7 +1904,7 @@ function renderSkillCard(s) {
       <span>Used: ${s.usage_count || 0}x</span>
       ${s.last_used_at ? `<span>Last: ${formatDate(s.last_used_at)}</span>` : ''}
     </div>
-    ${methods.length > 0 ? `<div style="margin-top:8px;font-size:0.78rem;color:var(--text-muted)"><strong>Steps:</strong><ol style="margin:4px 0 0 16px">${methods.map(m=>`<li>${esc(m)}</li>`).join('')}</ol></div>` : ''}
+    ${methods.length > 0 ? `<div style="margin-top:8px;font-size:0.78rem;color:var(--text-muted)"><strong>Steps:</strong><ol style="margin:4px 0 0 16px">${methods.map(m=>`<li>${esc(typeof m === 'string' ? m : m.description || JSON.stringify(m))}</li>`).join('')}</ol></div>` : ''}
     ${tags.length > 0 ? `<div style="margin-top:8px;display:flex;gap:4px;flex-wrap:wrap">${tags.map(t=>`<span class="badge badge-tag">${esc(t)}</span>`).join('')}</div>` : ''}
   </div>`;
 }
@@ -1813,6 +1964,519 @@ async function searchMemories() {
   if (!data) { container.innerHTML = '<div class="empty-state"><p>Search failed.</p></div>'; return; }
   document.getElementById('mem-load-more').style.display = 'none';
   renderMemories(data.items || [], container);
+}
+
+// ── Workspace List View (Code / Docs / Wiki full listing) ──
+async function renderWorkspaceList(area, category) {
+  const icons = { code: '&#128187;', docs: '&#128196;', wiki: '&#128214;' };
+  const titles = { code: 'Code Files', docs: 'Documents', wiki: 'Wiki Pages' };
+  const navTypes = { code: 'ws_file', docs: 'ws_doc', wiki: 'wiki_page' };
+
+  // Fetch full list with higher limit
+  const data = await api(`/scan/files?category=${category}&limit=2000`);
+  const files = data?.files || [];
+
+  let html = `<div class="back-link" onclick="navigate({type:'overview'})">&larr; Back</div>`;
+  html += `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+    <h2 style="font-size:1.1rem;font-weight:600;display:flex;align-items:center;gap:8px">
+      <span>${icons[category] || ''}</span> ${titles[category] || category}
+      <span class="badge badge-cat">${files.length}</span>
+    </h2>
+    <input id="ws-list-filter" type="text" placeholder="Filter..." oninput="wsListFilter()" style="background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--text-primary);font-size:0.82rem;width:200px;outline:none">
+  </div>`;
+
+  html += '<div id="ws-list-items">';
+  html += wsListRenderItems(files, category, navTypes[category]);
+  html += '</div>';
+
+  area.innerHTML = html;
+
+  // Store data for filtering
+  window._wsListData = { files, category, navType: navTypes[category] };
+}
+
+function wsListFilter() {
+  const filter = (document.getElementById('ws-list-filter')?.value || '').toLowerCase();
+  const { files, category, navType } = window._wsListData || {};
+  if (!files) return;
+  const filtered = filter
+    ? files.filter(f => ((f.relativePath || f.title || '') + ' ' + (f.id || '')).toLowerCase().includes(filter))
+    : files;
+  document.getElementById('ws-list-items').innerHTML = wsListRenderItems(filtered, category, navType);
+}
+
+function wsListRenderItems(files, category, navType) {
+  if (files.length === 0) return '<div class="empty-state"><p>No items match your filter.</p></div>';
+
+  if (category === 'wiki') {
+    // Group wiki by module/concept
+    const modules = files.filter(f => f.id?.startsWith('wiki:modules/'));
+    const concepts = files.filter(f => f.id?.startsWith('wiki:concepts/'));
+    let html = '';
+    if (modules.length > 0) {
+      html += `<h3 style="font-size:0.88rem;font-weight:600;margin:12px 0 8px;color:var(--text-secondary)">&#128211; Modules (${modules.length})</h3>`;
+      html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:16px">';
+      for (const f of modules) {
+        html += `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);cursor:pointer;transition:background 150ms" onmouseenter="this.style.background='var(--bg-hover)'" onmouseleave="this.style.background=''" onclick="navigate({type:'${navType}',id:'${escJs(f.id)}'})">
+          <span style="color:var(--blue);font-size:0.85rem">&#128211;</span>
+          <span style="flex:1;font-size:0.85rem">${esc(f.title || f.id)}</span>
+        </div>`;
+      }
+      html += '</div>';
+    }
+    if (concepts.length > 0) {
+      html += `<h3 style="font-size:0.88rem;font-weight:600;margin:12px 0 8px;color:var(--text-secondary)">&#128215; Concepts (${concepts.length})</h3>`;
+      html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">';
+      for (const f of concepts) {
+        html += `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);cursor:pointer;transition:background 150ms" onmouseenter="this.style.background='var(--bg-hover)'" onmouseleave="this.style.background=''" onclick="navigate({type:'${navType}',id:'${escJs(f.id)}'})">
+          <span style="color:var(--purple);font-size:0.85rem">&#128215;</span>
+          <span style="flex:1;font-size:0.85rem">${esc(f.title || f.id)}</span>
+        </div>`;
+      }
+      html += '</div>';
+    }
+    return html;
+  }
+
+  // Code and Docs: group by directory
+  const dirs = {};
+  for (const f of files) {
+    const rel = f.relativePath || f.title || '';
+    const parts = rel.split('/');
+    const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : '(root)';
+    if (!dirs[dir]) dirs[dir] = [];
+    dirs[dir].push(f);
+  }
+
+  let html = '';
+  const sortedDirs = Object.entries(dirs).sort(([a],[b]) => a.localeCompare(b));
+  for (const [dir, dirFiles] of sortedDirs) {
+    html += `<div style="margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:6px;padding:6px 0;font-size:0.82rem;font-weight:600;color:var(--text-secondary)">
+        <span>&#128193;</span> ${esc(dir)} <span class="badge badge-cat">${dirFiles.length}</span>
+      </div>
+      <div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">`;
+    for (const f of dirFiles) {
+      const fileName = (f.relativePath || f.title).split('/').pop();
+      const sizeStr = f.size ? (f.size < 1024 ? f.size + ' B' : (f.size / 1024).toFixed(1) + ' KB') : '';
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.82rem;transition:background 150ms" onmouseenter="this.style.background='var(--bg-hover)'" onmouseleave="this.style.background=''" onclick="navigate({type:'${navType}',id:'${escJs(f.id)}'})">
+        <span style="width:6px;height:6px;border-radius:50%;background:${category === 'code' ? 'var(--cyan)' : 'var(--yellow)'};flex-shrink:0"></span>
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(fileName)}</span>
+        ${sizeStr ? `<span style="font-size:0.72rem;color:var(--text-muted)">${sizeStr}</span>` : ''}
+      </div>`;
+    }
+    html += '</div></div>';
+  }
+  return html;
+}
+
+// ── Workspace File Detail ──
+async function renderWorkspaceFile(area, fileId) {
+  const data = await api('/scan/file/' + encodeURIComponent(fileId));
+  if (!data || data.error) { area.innerHTML = `<div class="empty-state"><p>${esc(data?.error || 'File not found')}</p></div>`; return; }
+
+  const meta = typeof data.metadata === 'string' ? JSON.parse(data.metadata || '{}') : (data.metadata || {});
+  const edges = data.edges || [];
+  const symbols = edges.filter(e => e.type === 'contains');
+  const imports = edges.filter(e => e.type === 'import');
+  const docRefs = edges.filter(e => e.type === 'doc_reference');
+  const similars = edges.filter(e => e.type === 'similarity').sort((a, b) => (b.weight || 0) - (a.weight || 0));
+  const relPath = meta.relativePath || data.title || '';
+  const lang = meta.language || meta.category || '';
+  const size = meta.size ? (meta.size < 1024 ? meta.size + ' B' : (meta.size / 1024).toFixed(1) + ' KB') : '';
+
+  let html = `<div class="back-link" onclick="navigate({type:'overview'})">&larr; Back</div>`;
+  html += `<div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:20px">
+    <h2 style="font-size:1.1rem;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:8px">
+      <span style="color:var(--cyan)">&#128187;</span> ${esc(data.title)}
+    </h2>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${lang ? `<span class="badge badge-cat">${esc(lang)}</span>` : ''}
+      ${size ? `<span class="badge badge-cat">${size}</span>` : ''}
+      <span class="badge badge-cat" style="font-family:monospace;font-size:0.72rem">${esc(relPath)}</span>
+    </div>
+  </div>`;
+
+  // Symbols
+  if (symbols.length > 0) {
+    html += `<h3 style="font-size:0.9rem;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:6px">
+      <span style="color:var(--purple)">&#9670;</span> Symbols <span class="badge badge-cat">${symbols.length}</span>
+    </h3>`;
+    html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:20px">';
+    for (const e of symbols.slice(0, 40)) {
+      const parts = e.to.split(':');
+      const name = parts.length >= 3 ? parts[2] : e.to;
+      const line = parts.length >= 4 ? parts[3] : '';
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);font-size:0.82rem">
+        <span style="color:var(--purple);font-family:monospace;font-size:0.75rem;width:20px">fn</span>
+        <span style="flex:1;font-family:monospace;color:var(--text-primary)">${esc(name)}</span>
+        ${line ? `<span style="font-size:0.7rem;color:var(--text-muted)">:${line}</span>` : ''}
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  // Dependencies
+  if (imports.length > 0) {
+    html += `<h3 style="font-size:0.9rem;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:6px">
+      <span style="color:var(--green)">&#8594;</span> Dependencies <span class="badge badge-cat">${imports.length}</span>
+    </h3>`;
+    html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:20px">';
+    for (const e of imports.slice(0, 30)) {
+      const target = e.to.replace(/^file:/, '');
+      const isExt = !target.includes('/') || target.startsWith('node_modules');
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);font-size:0.82rem;cursor:${isExt ? 'default' : 'pointer'}"
+        ${!isExt ? `onclick="navigate({type:'ws_file',id:'${escJs(e.to)}'})"` : ''}>
+        <span style="color:${isExt ? 'var(--text-muted)' : 'var(--green)'};font-size:0.75rem">&#128279;</span>
+        <span style="flex:1;font-family:monospace;font-size:0.78rem;color:${isExt ? 'var(--text-muted)' : 'var(--text-primary)'}">${esc(target)}</span>
+        ${isExt ? '<span style="font-size:0.7rem;color:var(--text-muted);font-style:italic">external</span>' : ''}
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  // Doc references
+  if (docRefs.length > 0) {
+    html += `<h3 style="font-size:0.9rem;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:6px">
+      <span style="color:var(--yellow)">&#128196;</span> Doc References <span class="badge badge-cat">${docRefs.length}</span>
+    </h3>`;
+    html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:20px">';
+    for (const e of docRefs.slice(0, 20)) {
+      const target = (e.from === fileId ? e.to : e.from).replace(/^file:/, '');
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);font-size:0.82rem;cursor:pointer"
+        onclick="navigate({type:'ws_doc',id:'${escJs(e.from === fileId ? e.to : e.from)}'})">
+        <span style="color:var(--yellow);font-size:0.75rem">&#128196;</span>
+        <span style="flex:1;font-family:monospace;font-size:0.78rem">${esc(target)}</span>
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  // Similar files (via vector similarity)
+  if (similars.length > 0) {
+    html += `<h3 style="font-size:0.9rem;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:6px">
+      <span style="color:var(--cyan)">&#10038;</span> Similar Files <span class="badge badge-cat">${similars.length}</span>
+    </h3>`;
+    html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:20px">';
+    for (const e of similars.slice(0, 12)) {
+      const target = (e.from === fileId ? e.to : e.from);
+      const targetLabel = target.replace(/^(file|wiki|doc|sym):/, '');
+      const prefix = target.split(':')[0];
+      const navType = prefix === 'wiki' ? 'ws_wiki' : prefix === 'sym' ? 'ws_file' : (prefix === 'doc' ? 'ws_doc' : 'ws_file');
+      const score = e.weight ? (e.weight * 100).toFixed(0) + '%' : '';
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);font-size:0.82rem;cursor:pointer"
+        onclick="navigate({type:'${navType}',id:'${escJs(target)}'})">
+        <span style="color:var(--cyan);font-size:0.75rem">&#10038;</span>
+        <span style="flex:1;font-family:monospace;font-size:0.78rem">${esc(targetLabel)}</span>
+        ${score ? `<span style="font-size:0.7rem;color:var(--text-muted);font-family:monospace">${score}</span>` : ''}
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  // Related knowledge cards (match by filename)
+  const fileName = relPath.split('/').pop()?.toLowerCase() || '';
+  if (fileName.length > 3) {
+    const related = sidebarData.knowledgeCards.filter(c =>
+      (c.summary || '').toLowerCase().includes(fileName) || (c.title || '').toLowerCase().includes(fileName)
+    ).slice(0, 8);
+    if (related.length > 0) {
+      html += `<h3 style="font-size:0.9rem;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:6px">
+        <span>&#129504;</span> Related Knowledge <span class="badge badge-cat">${related.length}</span>
+      </h3>`;
+      html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:20px">';
+      for (const c of related) {
+        html += `<div style="display:flex;align-items:flex-start;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);cursor:pointer"
+          onclick="navigate({type:'card',id:'${escJs(c.id)}'})">
+          <span class="badge badge-${c.category}" style="margin-top:2px;font-size:0.68rem">${esc(c.category)}</span>
+          <div style="min-width:0">
+            <div style="font-size:0.82rem;font-weight:500">${esc(c.title)}</div>
+            <div style="font-size:0.75rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((c.summary || '').substring(0, 120))}</div>
+          </div>
+        </div>`;
+      }
+      html += '</div>';
+    }
+  }
+
+  // File content preview — show source code for files without rich structural data
+  if (data.content) {
+    const hasStructure = symbols.length > 0 || imports.length > 0 || docRefs.length > 0;
+    html += `<h3 style="font-size:0.9rem;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:6px">
+      <span style="color:var(--text-muted)">&#128196;</span> ${hasStructure ? 'Source Preview' : 'File Content'}
+    </h3>`;
+    const preview = data.content.length > 3000 ? data.content.substring(0, 3000) + '\n\n... (truncated)' : data.content;
+    html += `<pre style="border:1px solid var(--border);border-radius:var(--radius);padding:14px;background:var(--bg-secondary);overflow-x:auto;font-size:0.78rem;line-height:1.5;color:var(--text-secondary);max-height:500px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">${esc(preview)}</pre>`;
+  }
+
+  area.innerHTML = html;
+}
+
+// ── Workspace Doc Detail ──
+async function renderWorkspaceDoc(area, docId) {
+  const data = await api('/scan/file/' + encodeURIComponent(docId));
+  if (!data || data.error) { area.innerHTML = `<div class="empty-state"><p>${esc(data?.error || 'Document not found')}</p></div>`; return; }
+
+  const meta = typeof data.metadata === 'string' ? JSON.parse(data.metadata || '{}') : (data.metadata || {});
+  const relPath = meta.relativePath || data.title || '';
+
+  let html = `<div class="back-link" onclick="navigate({type:'overview'})">&larr; Back</div>`;
+  html += `<div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:20px">
+    <h2 style="font-size:1.1rem;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:8px">
+      <span style="color:var(--yellow)">&#128196;</span> ${esc(data.title)}
+    </h2>
+    <span style="font-size:0.78rem;color:var(--text-muted);font-family:monospace">${esc(relPath)}</span>
+  </div>`;
+
+  if (data.content) {
+    html += `<article class="markdown-body" style="border:1px solid var(--border);border-radius:var(--radius);padding:20px;background:var(--bg-secondary)">${renderMd(data.content)}</article>`;
+  } else {
+    html += '<div class="empty-state"><p>No content available for this document.</p></div>';
+  }
+
+  // Similar documents (via vector similarity)
+  const docEdges = data.edges || [];
+  const docSimilars = docEdges.filter(e => e.type === 'similarity').sort((a, b) => (b.weight || 0) - (a.weight || 0));
+  if (docSimilars.length > 0) {
+    html += `<h3 style="font-size:0.9rem;font-weight:600;margin:20px 0 8px;display:flex;align-items:center;gap:6px">
+      <span style="color:var(--cyan)">&#10038;</span> Similar Documents <span class="badge badge-cat">${docSimilars.length}</span>
+    </h3>`;
+    html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">';
+    for (const e of docSimilars.slice(0, 12)) {
+      const target = e.from === docId ? e.to : e.from;
+      const targetLabel = target.replace(/^(file|doc):/, '');
+      const score = e.weight ? (e.weight * 100).toFixed(0) + '%' : '';
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);font-size:0.82rem;cursor:pointer"
+        onclick="navigate({type:'ws_doc',id:'${escJs(target)}'})">
+        <span style="color:var(--yellow);font-size:0.75rem">&#128196;</span>
+        <span style="flex:1;font-family:monospace;font-size:0.78rem">${esc(targetLabel)}</span>
+        ${score ? `<span style="font-size:0.7rem;color:var(--text-muted);font-family:monospace">${score}</span>` : ''}
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  // Doc references
+  const docRefs = docEdges.filter(e => e.type === 'doc_reference');
+  if (docRefs.length > 0) {
+    html += `<h3 style="font-size:0.9rem;font-weight:600;margin:20px 0 8px;display:flex;align-items:center;gap:6px">
+      <span style="color:var(--green)">&#128279;</span> References <span class="badge badge-cat">${docRefs.length}</span>
+    </h3>`;
+    html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">';
+    for (const e of docRefs.slice(0, 20)) {
+      const target = (e.from === docId ? e.to : e.from);
+      const targetLabel = target.replace(/^(file|doc|wiki):/, '');
+      const prefix = target.split(':')[0];
+      const navType = prefix === 'wiki' ? 'wiki_page' : prefix === 'doc' ? 'ws_doc' : 'ws_file';
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);font-size:0.82rem;cursor:pointer"
+        onclick="navigate({type:'${navType}',id:'${escJs(target)}'})">
+        <span style="color:var(--green);font-size:0.75rem">&#128279;</span>
+        <span style="flex:1;font-family:monospace;font-size:0.78rem">${esc(targetLabel)}</span>
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  area.innerHTML = html;
+}
+
+// ── Wiki Page Detail ──
+/** Render wiki page content with clickable links for cards, files, and dependencies */
+function renderWikiContent(content, isModule, pageId) {
+  const lines = content.split('\n');
+  let html = '<div style="border:1px solid var(--border);border-radius:var(--radius);padding:20px;background:var(--bg-secondary)">';
+
+  // Build a lookup of knowledge cards by title for linking
+  const cardsByTitle = {};
+  for (const c of (sidebarData.knowledgeCards || [])) {
+    if (c.title) cardsByTitle[c.title.toLowerCase()] = c;
+  }
+
+  let inSection = null; // 'files', 'knowledge', 'deps', 'exports', null
+  let currentFileHeading = null;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    // Skip the main H1 title (already shown in header)
+    if (/^# /.test(trimmed) && !inSection) continue;
+
+    // Blockquote summary line
+    if (/^> /.test(trimmed)) {
+      html += `<div style="color:var(--text-muted);font-size:0.85rem;margin-bottom:16px;padding:8px 12px;border-left:3px solid var(--border);background:var(--bg-tertiary);border-radius:0 var(--radius-sm) var(--radius-sm) 0">${esc(trimmed.replace(/^>\s*/, '').replace(/\*\*/g, ''))}</div>`;
+      continue;
+    }
+
+    // H2 section headers
+    if (/^## /.test(trimmed)) {
+      const title = trimmed.replace(/^##\s*/, '');
+      if (/related knowledge/i.test(title)) inSection = 'knowledge';
+      else if (/files/i.test(title)) inSection = 'files';
+      else inSection = null;
+      html += `<h3 style="font-size:0.95rem;font-weight:600;margin:20px 0 10px;border-bottom:1px solid var(--border);padding-bottom:6px">${esc(title)}</h3>`;
+      continue;
+    }
+
+    // H3 file headings inside module pages (### cloud-sync.mjs)
+    if (/^### /.test(trimmed)) {
+      currentFileHeading = trimmed.replace(/^###\s*/, '');
+      // Try to find the file's full path
+      const wsFiles = sidebarData.wsCode || [];
+      const match = wsFiles.find(f => (f.relativePath || f.title || '').endsWith('/' + currentFileHeading) || f.title === currentFileHeading);
+      if (match) {
+        html += `<h4 style="font-size:0.88rem;font-weight:600;margin:16px 0 6px;cursor:pointer;color:var(--accent)" onclick="navigate({type:'ws_file',id:'${escJs(match.id)}'})">${esc(currentFileHeading)} &#8599;</h4>`;
+      } else {
+        html += `<h4 style="font-size:0.88rem;font-weight:600;margin:16px 0 6px">${esc(currentFileHeading)}</h4>`;
+      }
+      continue;
+    }
+
+    // Bold text sections (**Exports:** or **Dependencies (import):**)
+    if (/^\*\*/.test(trimmed)) {
+      const label = trimmed.replace(/\*\*/g, '');
+      if (/export/i.test(label)) inSection = 'exports';
+      else if (/dependenc/i.test(label)) inSection = 'deps';
+      else inSection = null;
+      html += `<div style="font-size:0.82rem;font-weight:600;color:var(--text-secondary);margin:8px 0 4px">${esc(label)}</div>`;
+      continue;
+    }
+
+    // List items: - `functionName` (function/class) or - path/to/file.mjs
+    if (/^[-*] /.test(trimmed)) {
+      const itemText = trimmed.replace(/^[-*]\s*/, '');
+
+      // Concept page: knowledge card reference (bold title — tags: ...)
+      if (inSection === 'knowledge') {
+        const cardMatch = itemText.match(/^\*\*(.+?)\*\*\s*—?\s*tags?:\s*(.*)/);
+        if (cardMatch) {
+          const cardTitle = cardMatch[1];
+          const tags = cardMatch[2];
+          const card = cardsByTitle[cardTitle.toLowerCase()];
+          if (card) {
+            html += `<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;cursor:pointer" onclick="navigate({type:'card',id:'${escJs(card.id)}'})">
+              <span style="color:var(--accent);margin-top:2px">&#128203;</span>
+              <div><div style="font-size:0.85rem;color:var(--accent)">${esc(cardTitle)}</div>
+              <div style="font-size:0.72rem;color:var(--text-muted)">${esc(tags)}</div></div>
+            </div>`;
+          } else {
+            html += `<div style="padding:4px 0;font-size:0.85rem">&#128203; <strong>${esc(cardTitle)}</strong> <span style="color:var(--text-muted);font-size:0.72rem">${esc(tags)}</span></div>`;
+          }
+          continue;
+        }
+      }
+
+      // Module page: export symbols
+      if (inSection === 'exports') {
+        const symMatch = itemText.match(/`(.+?)`\s*\((\w+)\)/);
+        if (symMatch) {
+          html += `<div style="padding:2px 0 2px 12px;font-size:0.82rem;font-family:monospace">
+            <span style="color:var(--purple);font-size:0.75rem;margin-right:4px">${symMatch[2] === 'class' ? 'cls' : 'fn'}</span>
+            <span style="color:var(--text-primary)">${esc(symMatch[1])}</span>
+            <span style="color:var(--text-muted);font-size:0.72rem;margin-left:4px">(${esc(symMatch[2])})</span>
+          </div>`;
+          continue;
+        }
+      }
+
+      // Module page: dependency file paths
+      if (inSection === 'deps') {
+        const depPath = itemText.replace(/`/g, '').trim();
+        if (depPath.includes('/')) {
+          const wsFiles = sidebarData.wsCode || [];
+          const match = wsFiles.find(f => (f.relativePath || '') === depPath);
+          if (match) {
+            html += `<div style="padding:2px 0 2px 12px;font-size:0.82rem;cursor:pointer" onclick="navigate({type:'ws_file',id:'${escJs(match.id)}'})">
+              <span style="color:var(--green);margin-right:4px">&#8594;</span>
+              <span style="font-family:monospace;color:var(--accent)">${esc(depPath)}</span>
+            </div>`;
+          } else {
+            html += `<div style="padding:2px 0 2px 12px;font-size:0.82rem;font-family:monospace;color:var(--text-muted)">&#8594; ${esc(depPath)}</div>`;
+          }
+          continue;
+        }
+      }
+
+      // Default list item
+      html += `<div style="padding:2px 0 2px 12px;font-size:0.85rem">&#8226; ${esc(itemText)}</div>`;
+      continue;
+    }
+
+    // Empty lines → spacing
+    if (!trimmed) {
+      html += '<div style="height:6px"></div>';
+      continue;
+    }
+
+    // Regular text
+    html += `<div style="font-size:0.85rem;color:var(--text-secondary)">${esc(trimmed)}</div>`;
+  }
+
+  html += '</div>';
+  return html;
+}
+
+async function renderWikiPage(area, pageId) {
+  const data = await api('/scan/file/' + encodeURIComponent(pageId));
+  if (!data || data.error) { area.innerHTML = `<div class="empty-state"><p>${esc(data?.error || 'Wiki page not found')}</p></div>`; return; }
+
+  const isModule = pageId.includes('modules/');
+  let html = `<div class="back-link" onclick="navigate({type:'overview'})">&larr; Back</div>`;
+  html += `<div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:20px">
+    <h2 style="font-size:1.1rem;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:8px">
+      <span style="font-size:1.1rem">${isModule ? '&#128211;' : '&#128215;'}</span> ${esc(data.title || pageId)}
+    </h2>
+    <span style="font-size:0.78rem;color:var(--text-muted)">${isModule ? 'Module Page' : 'Concept Page'}</span>
+  </div>`;
+
+  if (data.content) {
+    // Parse wiki content into structured clickable sections instead of plain markdown
+    html += renderWikiContent(data.content, isModule, pageId);
+  } else {
+    html += '<div class="empty-state"><p>No wiki content generated yet. Run a scan to generate wiki pages.</p></div>';
+  }
+
+  // Member files from edges
+  const edges = data.edges || [];
+  const memberEdges = edges.filter(e => e.type === 'contains' || e.type === 'import');
+  if (memberEdges.length > 0) {
+    html += `<h3 style="font-size:0.9rem;font-weight:600;margin:20px 0 8px;display:flex;align-items:center;gap:6px">
+      <span style="color:var(--cyan)">&#128187;</span> Files <span class="badge badge-cat">${memberEdges.length}</span>
+    </h3>`;
+    html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">';
+    for (const e of memberEdges.slice(0, 30)) {
+      const target = (e.from === pageId ? e.to : e.from).replace(/^file:/, '');
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);font-size:0.82rem;cursor:pointer"
+        onclick="navigate({type:'ws_file',id:'${escJs(e.from === pageId ? e.to : e.from)}'})">
+        <span style="color:var(--cyan);font-size:0.75rem">&#128187;</span>
+        <span style="flex:1;font-family:monospace;font-size:0.78rem">${esc(target)}</span>
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  // Similar wiki pages (via vector similarity)
+  const wikiSimilars = edges.filter(e => e.type === 'similarity').sort((a, b) => (b.weight || 0) - (a.weight || 0));
+  if (wikiSimilars.length > 0) {
+    html += `<h3 style="font-size:0.9rem;font-weight:600;margin:20px 0 8px;display:flex;align-items:center;gap:6px">
+      <span style="color:var(--cyan)">&#10038;</span> Similar Pages <span class="badge badge-cat">${wikiSimilars.length}</span>
+    </h3>`;
+    html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">';
+    for (const e of wikiSimilars.slice(0, 12)) {
+      const target = e.from === pageId ? e.to : e.from;
+      const targetLabel = target.replace(/^wiki:(modules|concepts)\//, '');
+      const isConcept = target.includes('concepts/');
+      const score = e.weight ? (e.weight * 100).toFixed(0) + '%' : '';
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);font-size:0.82rem;cursor:pointer"
+        onclick="navigate({type:'wiki_page',id:'${escJs(target)}'})">
+        <span style="font-size:0.75rem">${isConcept ? '&#128215;' : '&#128211;'}</span>
+        <span style="flex:1;font-size:0.82rem">${esc(targetLabel)}</span>
+        ${score ? `<span style="font-size:0.7rem;color:var(--text-muted);font-family:monospace">${score}</span>` : ''}
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  area.innerHTML = html;
 }
 
 function renderMemoryItem(m) {
@@ -2445,6 +3109,21 @@ async function init() {
   setInterval(() => { checkDaemon(); }, 30000);
 }
 init();
+
+/* ── Expose i18n primitives to window for decoupled modules (onboarding, etc.) ── */
+window.LOCALES = LOCALES;
+window.t = t;
 </script>
+
+<!-- ── F-040 Onboarding: loaded as decoupled modules from /web/onboarding/* ── -->
+<link rel="stylesheet" href="/web/onboarding/styles.css">
+<script src="/web/onboarding/i18n.js"></script>
+<script src="/web/onboarding/state.js"></script>
+<script src="/web/onboarding/recall-suggestions.js"></script>
+<script src="/web/onboarding/device-auth-flow.js"></script>
+<script src="/web/onboarding/steps.js"></script>
+<script src="/web/onboarding/index.js"></script>
+<script src="/web/onboarding/status-chip.js"></script>
+<script src="/web/onboarding/privacy-settings.js"></script>
 </body>
 </html>

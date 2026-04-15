@@ -7,6 +7,10 @@ import {
   apiScanStatus, apiScanTrigger, apiScanFiles,
   apiScanFileDetail, apiScanConfig, apiScanConfigUpdate,
 } from './scan-api-handlers.mjs';
+import {
+  apiTelemetryStatus, apiTelemetryEnable,
+  apiTelemetryRecent, apiTelemetryDelete,
+} from './telemetry-api-handlers.mjs';
 
 export async function handleApiRoute(daemon, req, res, url) {
   const route = url.pathname.replace('/api/v1', '');
@@ -178,6 +182,20 @@ export async function handleApiRoute(daemon, req, res, url) {
 
   if (route === '/scan/config' && req.method === 'PUT') {
     return apiScanConfigUpdate(daemon, req, res);
+  }
+
+  // --- F-040 Telemetry API (opt-in anonymous analytics) ---
+  if (route === '/telemetry/status' && req.method === 'GET') {
+    return apiTelemetryStatus(daemon, req, res);
+  }
+  if (route === '/telemetry/enable' && req.method === 'POST') {
+    return apiTelemetryEnable(daemon, req, res);
+  }
+  if (route === '/telemetry/recent' && req.method === 'GET') {
+    return apiTelemetryRecent(daemon, req, res);
+  }
+  if (route === '/telemetry/data' && req.method === 'DELETE') {
+    return apiTelemetryDelete(daemon, req, res);
   }
 
   return jsonResponse(res, { error: 'Not found', route }, 404);

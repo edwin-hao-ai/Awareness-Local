@@ -1,6 +1,6 @@
 {
   "name": "@awareness-sdk/local",
-  "version": "0.5.24",
+  "version": "0.5.28",
   "description": "Local-first AI agent memory system. No account needed.",
   "license": "Apache-2.0",
   "type": "module",
@@ -19,9 +19,13 @@
     "@huggingface/transformers": "^3.0.0",
     "@modelcontextprotocol/sdk": "^1.27.0",
     "better-sqlite3": "^12.8.0",
-    "ignore": "^7.0.5"
+    "ignore": "^7.0.5",
+    "mammoth": "^1.12.0",
+    "pdf-parse": "^2.4.5",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@types/better-sqlite3": "^7.6.0"
   },
   "keywords": [
@@ -44,6 +48,7 @@
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs",
+    "test:e2e": "playwright test --config=playwright.config.mjs",
     "benchmark": "node bin/awareness-local.mjs benchmark",
     "benchmark:fixtures": "node bin/awareness-local.mjs benchmark --project ../../tests/memory-benchmark/projects/core-recall --dataset ../../tests/memory-benchmark/datasets/recall_core.jsonl --backend builtin --reindex",
     "benchmark:perception": "node src/benchmark/perception-benchmark.mjs --dataset ../../tests/memory-benchmark/datasets/perception_signals.jsonl --report ../../tests/memory-benchmark/reports/perception_guard_baseline.json --markdown-report ../../tests/memory-benchmark/reports/perception_guard_baseline.md",

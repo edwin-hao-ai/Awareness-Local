@@ -118,6 +118,59 @@ export async function callMcpTool(daemon, name, args) {
       }
     }
 
+    case 'awareness_workspace_search': {
+      const query = args.query;
+      if (!query) return mcpResult({ error: 'query is required' });
+
+      const nodeTypes = args.node_types || null;
+      const limit = Math.min(args.limit || 10, 30);
+      const includeNeighbors = args.include_neighbors ?? false;
+
+      // FTS5 search on graph_nodes
+      const results = daemon.indexer.searchGraphNodes(query, { nodeTypes, limit });
+
+      // Optional: expand with 1-hop similarity neighbors
+      let expanded = [];
+      if (includeNeighbors && results.length > 0) {
+        const seen = new Set(results.map(r => r.id));
+        for (const node of results.slice(0, 3)) {
+          const neighbors = daemon.indexer.graphTraverse(node.id, {
+            edgeTypes: ['similarity', 'doc_reference'],
+            maxDepth: 1,
+            limit: 3,
+          });
+          for (const n of neighbors) {
+            if (!seen.has(n.id)) {
+              seen.add(n.id);
+              expanded.push(n);
+            }
+          }
+        }
+      }
+
+      // Format results
+      const formatted = [...results, ...expanded].slice(0, limit).map(node => {
+        let metadata = {};
+        try { metadata = JSON.parse(node.metadata || '{}'); } catch { /* ignore */ }
+        return {
+          id: node.id,
+          type: node.node_type,
+          title: node.title || '',
+          summary: (node.content || '').slice(0, 500),
+          file_path: metadata.file_path || metadata.relative_path || '',
+          language: metadata.language || '',
+          score: Math.abs(node.rank || 0),
+          is_neighbor: expanded.includes(node),
+        };
+      });
+
+      return mcpResult({
+        results: formatted,
+        total: formatted.length,
+        query,
+      });
+    }
+
     default:
       throw new Error(`Unknown tool: ${name}`);
   }

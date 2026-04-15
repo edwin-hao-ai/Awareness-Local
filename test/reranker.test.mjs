@@ -65,7 +65,8 @@ describe('rerankWithFusion', () => {
       assert.ok(typeof r._rerankSignals.bm25 === 'number');
       assert.ok(typeof r._rerankSignals.semantic === 'number');
       assert.ok(typeof r._rerankSignals.recency === 'number');
-      assert.ok(typeof r._rerankSignals.salience === 'number');
+      assert.ok(typeof r._rerankSignals.cardType === 'number');
+      assert.ok(typeof r._rerankSignals.growth === 'number');
     }
   });
 
@@ -278,10 +279,9 @@ describe('rerankWithFusion — all-zero scores', () => {
     for (const r of ranked) {
       assert.ok(typeof r.rerankScore === 'number');
       assert.ok(!isNaN(r.rerankScore));
-      // BM25, semantic, salience all-zero → minMaxNormalize returns 0.5 for each
+      // BM25, semantic all-zero → minMaxNormalize returns 0.5 for each
       assert.equal(r._rerankSignals.bm25, 0.5, 'BM25 should normalize to 0.5 when all equal');
       assert.equal(r._rerankSignals.semantic, 0.5, 'Semantic should normalize to 0.5 when all equal');
-      assert.equal(r._rerankSignals.salience, 0.5, 'Salience should normalize to 0.5 when all equal');
     }
   });
 });

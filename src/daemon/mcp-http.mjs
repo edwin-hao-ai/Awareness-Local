@@ -7,6 +7,7 @@ const MCP_TOOL_NAMES = [
   'awareness_lookup',
   'awareness_get_agent_prompt',
   'awareness_apply_skill',
+  'awareness_workspace_search',
 ];
 
 export async function handleMcpHttp({ req, res, version, dispatchJsonRpc }) {

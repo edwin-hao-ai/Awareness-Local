@@ -211,13 +211,6 @@ function extractSemanticScore(result) {
 }
 
 /**
- * Extract salience score.
- */
-function extractSalienceScore(result) {
-  return result.salience_score ?? result.salience ?? 0;
-}
-
-/**
  * Compute card_type score — aligned with cloud backend.
  * moc = 1.0, index = 0.8, atomic = 0.3 (default)
  */

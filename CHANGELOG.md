@@ -1,5 +1,61 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **F-040 Onboarding MVP** — 6-step dashboard onboarding (Welcome → Scan → Recall → Wiki → Cloud → Done) as decoupled modules under `src/web/onboarding/` (7 files, each <300 lines). Auto-launches on first dashboard visit, skippable at every step.
+- **Step 5 reuses device-auth** (`/cloud/auth/start` + poll + connect) — not OAuth. Unregistered users are redirected to signup by awareness.market.
+- **Step 3 recall suggestions** are dynamically generated from scan metadata (README/wiki titles/top language) so the first query always has answers.
+- **i18n**: en + zh dictionaries merged into existing `window.LOCALES`; zero new language infrastructure.
+- **Static asset routing**: `handleWebUi` now serves `index.html` + whitelisted `/web/onboarding/*` files with MIME detection and path-traversal protection.
+- **Tests**: `test/web-static-handler.test.mjs` — 6 cases (200 / 400 / 404 coverage).
+- **F-040 Phase 2 — opt-in telemetry + Privacy UI**:
+  - `src/core/telemetry.mjs`: opt-in batched event reporter. Anonymous `installation_id = SHA-256(device_id + salt)`. Persists queue to `.awareness/telemetry-queue.json`; fire-and-forget POST, never blocks daemon. Whitelisted event_types + property keys.
+  - `src/daemon/telemetry-api-handlers.mjs`: `GET/POST /api/v1/telemetry/{status,enable,recent}`, `DELETE /api/v1/telemetry/data` for opt-in toggle, queue inspection, and self-deletion.
+  - Wired into `daemon.mjs` startup (emits `daemon_started` with version/os/node/arch/locale).
+  - Welcome step adds opt-in checkbox; persists via `/api/v1/telemetry/enable`.
+  - `src/web/onboarding/status-chip.js`: persistent floating widget showing local/cloud mode + memory count + "Connect cloud" CTA.
+  - `src/web/onboarding/privacy-settings.js`: injects "Usage Analytics" section into Settings panel (toggle / view recent events / delete data).
+- **Endpoint alignment**: onboarding now calls real scan endpoints (`/api/v1/scan/trigger`, `/api/v1/scan/status`, `/api/v1/scan/files?category=wiki`) — earlier draft used non-existent paths.
+
+### Tested (F-040 deep coverage)
+- **48 unit tests** for onboarding modules: state machine (8), recall-suggestions strategy + endpoint fallback + result normalization (20), i18n en/zh alignment + interpolation parity (5), XSS attack-string injection across 5 render functions (5), static-handler whitelist + URL-decode + NUL byte + symlink escape (10).
+- **11 unit tests** for `src/core/telemetry.mjs`: opt-in default, event_type whitelist, property whitelist + leak guard, deterministic SHA-256 installation_id, queue persistence, batched flush, deleteLocal forget call, MAX_QUEUE cap.
+- **15 Playwright E2E tests** under `test/e2e/`: happy-path (auto-launch + 6-step walkthrough), skip-all + reload persistence + reset(), zh/en locale switch, device-auth user_code rendering + memory selection + `javascript:` URL defang regression, status chip local/cloud states + CTA re-launch, Privacy section rendering + toggle POST + recent-events expand.
+- **3 real bugs found and fixed by tests**: (1) `pickSuggestions(null)` crash on default-param bypass; (2) `renderAuthPending` `javascript:` URL XSS in `href` (now defanged to `about:blank` if not `https?://`); (3) ZH dictionary missing chip keys.
+
+### Security
+- `handleWebUi` hardened: `decodeURIComponent` to catch `%2e%2e` traversal, NUL byte rejection, malformed URL → 400, `fs.realpathSync` symlink-escape protection.
+- New `playwright.config.mjs` + `npm run test:e2e` script; pinned `@playwright/test@1.58.2` (matches cached Chromium 1208).
+
+## [0.5.28] - 2026-04-14
+
+### Improved
+- **Hybrid search for task/risk auto-closure**: FTS5 BM25 + Jaccard word-overlap → Reciprocal Rank Fusion (RRF). Two channels combined for higher accuracy than either alone. Embedder vector similarity wired in as optional third channel when available.
+- **`runLifecycleChecks` is now async**: Accepts optional `embedFn`/`cosineFn` for hybrid search. Backward-compatible — works without embedder (FTS5+Jaccard only).
+- **6 new hybrid test scenarios**: Partial keyword overlap, unrelated task rejection, multi-task precision, Chinese risk mitigation, empty list handling, already-done task safety.
+
+## [0.5.27] - 2026-04-14
+
+### Improved
+- **Task auto-resolve upgraded to FTS5 BM25**: Previously used Jaccard word-overlap (less accurate). Now uses SQLite FTS5 BM25 ranking (same approach as risk auto-mitigate), with Jaccard as fallback for older databases without `tasks_fts` index.
+- **New `tasks_fts` FTS5 index**: Tasks are now indexed in a dedicated FTS5 virtual table with trigram tokenizer for accurate Chinese/CJK matching. Synced on every `indexTask()` call.
+
+## [0.5.26] - 2026-04-14
+
+### Fixed
+- **Document cloud sync missing from fullSync**: `pushDocumentsToCloud()` was implemented in sync-push.mjs (Phase 3) but never called in `fullSync()`. Documents were silently not syncing to cloud. Now included in the full sync pipeline.
+
+## [0.5.25] - 2026-04-14
+
+### Added
+- **`awareness_workspace_search` MCP tool**: New tool to search workspace files, code symbols, wiki pages, and documents via graph_nodes FTS5. Supports `node_types` filter and `include_neighbors` option for 1-hop similarity/doc_reference graph traversal expansion.
+- **Workspace graph expansion in recall**: `awareness_recall` now automatically searches graph_nodes (20% of FTS quota in scope='all') and appends up to 5 related workspace files/wiki/docs via graph traversal after primary results. Results are tagged as `workspace_file`/`workspace_wiki`/`workspace_doc`.
+- **`workspace_summary` in `awareness_init`**: Init response now includes project workspace statistics (node counts by type, total edges) when workspace has been scanned.
+
+### Fixed
+- **Reranker test assertions**: Fixed 2 pre-existing test failures where tests expected `_rerankSignals.salience` but the fusion formula outputs `cardType` and `growth`. Removed unused `extractSalienceScore()` dead code.
+
 ## [0.5.24] - 2026-04-12
 
 ### Added

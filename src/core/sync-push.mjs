@@ -402,3 +402,100 @@ export async function pushTasksToCloud(ctx) {
 
   return { synced, errors };
 }
+
+// ---------------------------------------------------------------------------
+// Push documents (workspace_scan)
+// ---------------------------------------------------------------------------
+
+const DOC_BATCH_SIZE = 10;
+
+/**
+ * Push document nodes (node_type='doc') from graph_nodes to the cloud.
+ *
+ * Only pushes documents where content_hash ≠ sync_hash (changed since last push).
+ * After successful push, updates sync_hash to avoid re-pushing.
+ *
+ * @param {object} ctx — same context as pushMemoriesToCloud
+ * @returns {Promise<{ synced: number, skipped: number, errors: number }>}
+ */
+export async function pushDocumentsToCloud(ctx) {
+  const { indexer, memoryId, httpPost, recordSyncEvent } = ctx;
+
+  let synced = 0;
+  let skipped = 0;
+  let errors = 0;
+
+  try {
+    // Fetch all doc nodes
+    const docNodes = indexer.db
+      .prepare("SELECT * FROM graph_nodes WHERE node_type = 'doc' AND (status IS NULL OR status != 'deleted')")
+      .all();
+
+    if (!docNodes.length) return { synced: 0, skipped: 0, errors: 0 };
+
+    // Filter to only those that need pushing (content_hash ≠ sync_hash)
+    const toPush = [];
+    for (const node of docNodes) {
+      if (node.sync_hash && node.sync_hash === node.content_hash) {
+        skipped++;
+        continue;
+      }
+      toPush.push(node);
+    }
+
+    if (!toPush.length) return { synced: 0, skipped, errors: 0 };
+
+    // Push in batches
+    const updateStmt = indexer.db.prepare(
+      'UPDATE graph_nodes SET sync_hash = ? WHERE id = ?'
+    );
+
+    for (let i = 0; i < toPush.length; i += DOC_BATCH_SIZE) {
+      const batch = toPush.slice(i, i + DOC_BATCH_SIZE);
+
+      try {
+        const documents = batch.map(node => {
+          let meta = {};
+          try { meta = JSON.parse(node.metadata || '{}'); } catch (_) {}
+          return {
+            title: node.title,
+            content: node.content || '',
+            content_hash: node.content_hash,
+            source_type: 'workspace_scan',
+            relative_path: meta.relativePath || node.title,
+            category: meta.category || 'docs',
+          };
+        });
+
+        const result = await httpPost(
+          `/memories/${memoryId}/documents/sync`,
+          { documents }
+        );
+
+        if (result && !result.error) {
+          for (const node of batch) {
+            updateStmt.run(node.content_hash, node.id);
+          }
+          synced += batch.length;
+        } else {
+          errors += batch.length;
+        }
+      } catch (err) {
+        console.warn(`${LOG_PREFIX} Failed to push document batch:`, err.message);
+        errors += batch.length;
+      }
+    }
+
+    if (synced > 0) {
+      console.log(
+        `${LOG_PREFIX} Pushed ${synced} documents to cloud` +
+          (errors ? ` (${errors} errors)` : '')
+      );
+      recordSyncEvent('documents', { count: synced, direction: 'push' });
+    }
+  } catch (err) {
+    console.error(`${LOG_PREFIX} pushDocumentsToCloud failed:`, err.message);
+  }
+
+  return { synced, skipped, errors };
+}

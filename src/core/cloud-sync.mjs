@@ -8,7 +8,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import { ensureSyncSchema, getSyncState, setSyncState, recordSyncEvent, getSyncHistory as getSyncHistoryImpl, parseTags, sleep } from './sync-state.mjs';
-import { pushMemoriesToCloud, pushInsightsToCloud, pushTasksToCloud } from './sync-push.mjs';
+import { pushMemoriesToCloud, pushInsightsToCloud, pushTasksToCloud, pushDocumentsToCloud } from './sync-push.mjs';
 import { createSSEState, startSSE as startSSEImpl, scheduleSSEReconnect, stopSSE } from './sync-sse.mjs';
 import { ensureConflictSchema, createLocalConflict } from './sync-conflict.mjs';
 // New v2 sync modules
@@ -187,6 +187,11 @@ export class CloudSync {
     return pushTasksToCloud(this._buildCtx());
   }
 
+  async syncDocumentsToCloud() {
+    if (!this.isEnabled()) return { synced: 0, skipped: 0, errors: 0 };
+    return pushDocumentsToCloud(this._buildCtx());
+  }
+
   async pullFromCloud() {
     if (!this.isEnabled()) return { pulled: 0 };
     let pulled = 0;
@@ -241,17 +246,19 @@ export class CloudSync {
       console.warn(`${LOG_PREFIX} Card pull failed:`, err.message);
     }
 
-    // Push memories (bulk), cards (v2 optimistic), tasks (bulk), skills
+    // Push memories (bulk), cards (v2 optimistic), tasks (bulk), skills, documents
     const pushResult = await this.syncToCloud();
     const cardsResult = await this._pushCardsV2();
     const tasksResult = await this.syncTasksToCloud();
     const skillsResult = await this._syncSkills();
     const risksResult = await this._pullRisks();
+    let docsResult = { synced: 0 };
+    try { docsResult = await this.syncDocumentsToCloud(); } catch { /* non-fatal */ }
     return {
       pushed: pushResult.synced, insights_pushed: cardsResult.synced,
       tasks_pushed: tasksResult.synced, skills_synced: skillsResult.synced,
-      risks_pulled: risksResult.pulled, pulled: pullResult.pulled,
-      conflicts: cardsResult.conflicts || 0,
+      docs_pushed: docsResult.synced, risks_pulled: risksResult.pulled,
+      pulled: pullResult.pulled, conflicts: cardsResult.conflicts || 0,
     };
   }
 
