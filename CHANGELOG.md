@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.6.0] - 2026-04-15
 
 ### Added
 - **F-040 Onboarding MVP** — 6-step dashboard onboarding (Welcome → Scan → Recall → Wiki → Cloud → Done) as decoupled modules under `src/web/onboarding/` (7 files, each <300 lines). Auto-launches on first dashboard visit, skippable at every step.
