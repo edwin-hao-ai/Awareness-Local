@@ -146,10 +146,26 @@
           getWikiSummary,
         });
       case 5:
-        return Steps.renderCloudIntro(root, {
-          onConnect: () => startDeviceAuth(root),
-          onLater: () => go(6),
-        });
+        // If the user has already connected cloud (either in a prior run or
+        // via the dashboard's Settings panel), skip Step 5 silently rather
+        // than asking them to "connect cloud" a second time.
+        (async () => {
+          try {
+            const r = await fetch('/api/v1/sync/status');
+            if (r.ok) {
+              const s = await r.json();
+              if (s?.cloud_enabled || s?.enabled || s?.connected) {
+                window.__onb_cloud_connected = true;
+                return go(6);
+              }
+            }
+          } catch { /* fall through to cloud intro */ }
+          return Steps.renderCloudIntro(root, {
+            onConnect: () => startDeviceAuth(root),
+            onLater: () => go(6),
+          });
+        })();
+        return;
       case 6:
         return Steps.renderDone(root, {
           checks: {
@@ -192,6 +208,13 @@
         onConfirm: async ({ memory_id, memory_name }) => {
           await Auth.connect({ api_key: result.api_key, memory_id, memory_name });
           window.__onb_cloud_connected = true;
+          // Notify the persistent status chip so it flips from
+          // "Local mode" to "Cloud synced" immediately (not after 30s).
+          try {
+            window.dispatchEvent(new CustomEvent('awareness:cloud-changed', {
+              detail: { enabled: true, memory_id, memory_name },
+            }));
+          } catch { /* older browsers — chip will still update on next tick */ }
           go(6);
         },
       });

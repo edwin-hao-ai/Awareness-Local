@@ -51,9 +51,9 @@
     const el = ensureMounted();
     const [stats, cloud] = await Promise.all([
       fetchJson('/api/v1/stats'),
-      fetchJson('/api/v1/cloud/status'),
+      fetchJson('/api/v1/sync/status'),
     ]);
-    const cloudOn = !!(cloud?.enabled || cloud?.connected);
+    const cloudOn = !!(cloud?.cloud_enabled || cloud?.enabled || cloud?.connected);
     const total = stats?.totalKnowledge ?? stats?.stats?.totalKnowledge ?? 0;
     const projects = stats?.projects ?? stats?.stats?.projects ?? 1;
 
@@ -81,7 +81,20 @@
     ensureMounted();
     refresh();
     timer = setInterval(refresh, REFRESH_MS);
+    // React immediately to cloud connect/disconnect events dispatched by
+    // the onboarding flow (or anywhere else that flips cloud state).
+    // Without this, the chip stays on "Local mode" for up to 30s after
+    // the user finishes cloud auth — a user-visible regression.
+    window.addEventListener('awareness:cloud-changed', () => {
+      refresh().catch(() => {});
+    });
+    // Also refresh on tab focus so a user returning from the auth browser
+    // tab sees the updated chip without waiting for the poll tick.
+    window.addEventListener('focus', () => { refresh().catch(() => {}); });
   }
+
+  // Expose refresh so tests and other modules can force an update.
+  window.AwarenessStatusChip = { refresh };
 
   if (document.readyState === 'complete' || document.readyState === 'interactive') {
     setTimeout(start, 100);

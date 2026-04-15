@@ -810,28 +810,30 @@ export function apiListTopics(daemon, _req, res, _url) {
     )
     .all();
 
-  if (mocRows.length > 0) {
-    const items = mocRows.map((r) => {
-      const parsedTags = _safeJsonParse(r.tags, []);
-      // Always recompute — stored link_count_outgoing can lag behind deletions
-      const liveCount = _countMocMembers(daemon.indexer.db, parsedTags);
-      return {
-        id: r.id,
-        title: r.title,
-        summary: r.summary || null,
-        card_count: liveCount,
-        last_updated_at: r.last_touched_at || r.created_at,
-        source: 'moc',
-        tags: parsedTags,
-      };
+  // Step 1: materialize MOC-based topics (if any).
+  const mocItems = [];
+  const coveredTags = new Set();
+  for (const r of mocRows) {
+    const parsedTags = _safeJsonParse(r.tags, []);
+    const liveCount = _countMocMembers(daemon.indexer.db, parsedTags);
+    if (liveCount <= 0) continue;
+    for (const tg of parsedTags) coveredTags.add(String(tg).trim().toLowerCase());
+    mocItems.push({
+      id: r.id,
+      title: r.title,
+      summary: r.summary || null,
+      card_count: liveCount,
+      last_updated_at: r.last_touched_at || r.created_at,
+      source: 'moc',
+      tags: parsedTags,
     });
-    // Drop empty MOCs — a topic with zero members is useless clutter
-    const nonEmpty = items.filter((it) => it.card_count > 0);
-    return jsonResponse(res, { items: nonEmpty, total: nonEmpty.length });
   }
 
-  // Fallback: no MOC cards — derive pseudo-topics from top tags
-  // This gives local-only users useful topic navigation
+  // Step 2: ALWAYS augment with tag-hotness topics (not just fallback).
+  // An MOC only exists where tryAutoMoc fired; most older cards — the
+  // bulk of the knowledge base — never produced one. Without this merge
+  // the sidebar shows just the handful of MOCs and hides hundreds of
+  // cards behind no topic at all.
   const tagRows = daemon.indexer.db
     .prepare(
       `SELECT tags FROM knowledge_cards
@@ -851,9 +853,10 @@ export function apiListTopics(daemon, _req, res, _url) {
     }
   }
 
-  // Only show tags with 2+ cards as topics
-  const items = Object.entries(tagCounts)
-    .filter(([, count]) => count >= 2)
+  // Only show tags with 2+ cards as topics, drop any tag already covered by
+  // an MOC (so we don't list the same theme twice).
+  const tagItems = Object.entries(tagCounts)
+    .filter(([tag, count]) => count >= 2 && !coveredTags.has(tag))
     .sort((a, b) => b[1] - a[1])
     .slice(0, 30)
     .map(([tag, count]) => ({
@@ -865,6 +868,7 @@ export function apiListTopics(daemon, _req, res, _url) {
       source: 'tag',
     }));
 
+  const items = [...mocItems, ...tagItems];
   return jsonResponse(res, { items, total: items.length });
 }
 

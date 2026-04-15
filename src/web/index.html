@@ -3017,15 +3017,15 @@ async function loadWorkspacePicker() {
   picker.innerHTML = html;
 }
 
-async function switchWorkspace(dir, port) {
+async function switchWorkspace(dir, _port) {
   wsPickerVisible = false;
   document.getElementById('ws-picker').style.display = 'none';
 
-  if (port && port !== parseInt(location.port, 10)) {
-    // Different daemon instance — just navigate
-    window.location.href = 'http://localhost:' + port + '/';
-    return;
-  }
+  // Single-daemon policy (F-040 v0.6.2): always POST /workspace/switch to
+  // the currently-running daemon. The legacy behaviour of jumping to a
+  // per-project port (e.g. 37802) broke because workspaces.json could
+  // contain stale ports that no longer have a listening daemon. The
+  // `_port` argument is preserved for call-site compatibility but ignored.
 
   // Same port — hot-switch via API
   const area = document.getElementById('content-area');

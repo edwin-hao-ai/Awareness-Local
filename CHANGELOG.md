@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.6.3] - 2026-04-15
+
+### Fixed
+- **Switching workspaces no longer jumps to a dead port** — `switchWorkspace()` always POSTs `/workspace/switch` to the current daemon instead of navigating to a per-project port from the legacy `~/.awareness/workspaces.json`. Stale ports (37801/37802/…) no longer break the picker.
+- **Status chip now flips to "Cloud synced" within ~300 ms** of a successful cloud connect. Listens for a new `awareness:cloud-changed` custom event the onboarding flow dispatches after `Auth.connect()` succeeds. Also refreshes on window focus so returning from the auth browser tab just works.
+- **Onboarding Step 5 auto-skips when cloud is already connected** — checks `/api/v1/sync/status`'s `cloud_enabled` and jumps straight to Done. Fixes "I already connected — why am I being asked again?"
+- **Dashboard sidebar now shows ~30 topics, not 1** — `/api/v1/topics` used to fall back to tag-hotness only when **no** MOC existed. With even one MOC present the fallback was suppressed and all other tag-based themes disappeared. Now MOCs + unique tag topics are merged (dedup by tag name).
+
+### Added — shipping gate methodology
+- `CLAUDE.md` gains a full "上线门禁方法论：5 层测试金字塔" section (Testing Trophy + chaos + mutation + zero-mock journey). Same methodology appended to `AwarenessClaw/CLAUDE.md`.
+- `scripts/verify-endpoints.mjs` — fails CI on any `fetch('/api/v1/..')` that has no matching server route. Caught a drift in this very PR (`/cloud/status` → `/sync/status`).
+- `scripts/verify-buttons.mjs` — fails CI on any orphan `data-action` button (the exact class of bug that broke Step 5 skip in 0.6.1).
+- `scripts/verify-zero-mock.mjs` — forbids `page.route`, `page.routeFromHAR`, and mock helpers in `test/e2e/user-journeys/` specs.
+- `scripts/ship-gate.sh` — one-command L1+L2+L3+L4 runner, intended to block `npm publish` and prod deploys.
+- `.githooks/pre-push` + `git config core.hooksPath .githooks` — runs L1 + zero-mock + shared-scripts sync on every `git push`. Emergency bypass: `git push --no-verify`.
+- `docs/features/onboarding-and-telemetry/ACCEPTANCE.md` — Given/When/Then per user journey with 1:1 mapping to each spec file.
+- `test/e2e/user-journeys/` (new folder, zero-mock policy enforced):
+  - `first-time-visit.spec.mjs`
+  - `switch-workspace.spec.mjs` (pins Bug A fix)
+  - `status-chip-reflects-cloud.spec.mjs` (pins Bug B fix)
+  - `recall-returns-real-results.spec.mjs`
+
+### Tested
+- 887 unit + 4 user-journey E2E (zero-mock) + 26 legacy E2E — all green.
+- Ship-gate passes on main.
+
 ## [0.6.2] - 2026-04-15
 
 ### Fixed
