@@ -57,7 +57,7 @@ import { startFileWatcher, startWorkspaceWatcher, startGitHeadWatcher } from './
 import { scanWorkspace, indexWorkspaceFiles, getGitChanges, getCurrentCommit, isGitRepo, markDeletedFiles, handleRenamedFiles } from './core/workspace-scanner.mjs';
 import { loadScanState, saveScanState, createScanState, updateScanState, appendScanError } from './core/scan-state.mjs';
 import { loadScanConfig } from './core/scan-config.mjs';
-import { initTelemetry, getTelemetry } from './core/telemetry.mjs';
+import { initTelemetry, getTelemetry, track } from './core/telemetry.mjs';
 import { loadGitignoreRules } from './core/gitignore-parser.mjs';
 import { classifyFile } from './core/scan-defaults.mjs';
 import {
@@ -67,6 +67,7 @@ import {
   warmupEmbedder,
 } from './daemon/embedding-helpers.mjs';
 import { runGraphEmbeddingPipeline } from './daemon/graph-embedder.mjs';
+import { shouldRequestExtraction, buildExtractionInstruction } from './daemon/extraction-instruction.mjs';
 
 // Read version from package.json (not hardcoded)
 const __daemon_dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -144,7 +145,7 @@ function _checkCrystallizationLocal(db, newCard) {
     const similarCards = rows.slice(0, _CRYST_MAX_CARDS).map(r => ({
       id: r.id,
       title: r.title,
-      summary: (r.summary || '').slice(0, 200),
+      summary: r.summary || '',
     }));
 
     const categories = [...new Set(rows.map(r => r.category))];
@@ -327,6 +328,7 @@ export class AwarenessLocalDaemon {
 
     // ---- Cloud sync (optional) ----
     const config = this._loadConfig();
+
     if (config.cloud?.enabled) {
       try {
         this.cloudSync = new CloudSync(config, this.indexer, this.memoryStore);
@@ -536,6 +538,7 @@ export class AwarenessLocalDaemon {
       jsonResponse(res, { error: 'Not Found' }, 404);
     } catch (err) {
       console.error('[awareness-local] request error:', err.message);
+      track('error_occurred', { error_code: err.code || 'unknown', component: 'api' });
       jsonResponse(res, { error: 'Internal Server Error' }, 500);
     }
   }
@@ -782,6 +785,26 @@ export class AwarenessLocalDaemon {
       filepath,
       mode: 'local',
     };
+
+    // Return _extraction_instruction when the caller didn't provide pre-extracted insights.
+    // This mirrors the cloud MCP backend behaviour: the client LLM does extraction using
+    // its own model, then calls awareness_record(action="submit_insights") with the result.
+    if (shouldRequestExtraction(params)) {
+      try {
+        const existingCards = this.indexer.db
+          .prepare("SELECT id, title, category, summary FROM knowledge_cards WHERE status = 'active' ORDER BY created_at DESC LIMIT 8")
+          .all();
+        const spec = this._loadSpec();
+        result._extraction_instruction = buildExtractionInstruction({
+          content: params.content,
+          memoryId: id,
+          existingCards,
+          spec,
+        });
+      } catch (_err) {
+        // Non-fatal: extraction instruction is best-effort
+      }
+    }
 
     if (perception && perception.length > 0) {
       result.perception = perception;
@@ -1179,6 +1202,8 @@ ${card.summary || card.title || ''}
           created_at: nowISO(),
           filepath: cardFilepath,
           content: card.summary || card.title || '',
+          novelty_score: card.novelty_score ?? null,
+          salience_reason: card.salience_reason || null,
         };
         this.indexer.indexKnowledgeCard(cardData);
 

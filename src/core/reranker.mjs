@@ -158,10 +158,18 @@ export async function rerankWithLLM(results, query, options = {}) {
   // Pre-filter with fusion to get top-30
   const prefilteredResults = rerankWithFusion(results, query, { topK: preFilterK });
 
-  // Build candidate list for LLM
-  const candidateText = prefilteredResults
-    .map((r, i) => `[${i}] ${r.title || ''}: ${(r.summary || r.content || '').slice(0, 200)}`)
-    .join('\n');
+  // Build candidate list for LLM — limit total chars to avoid context overflow
+  const MAX_RERANK_CHARS = 12000;
+  let charBudget = MAX_RERANK_CHARS;
+  const candidateLines = [];
+  for (let i = 0; i < prefilteredResults.length; i++) {
+    const r = prefilteredResults[i];
+    const line = `[${i}] ${r.title || ''}: ${r.summary || r.content || ''}`;
+    if (charBudget - line.length < 0 && candidateLines.length > 5) break;
+    candidateLines.push(line);
+    charBudget -= line.length;
+  }
+  const candidateText = candidateLines.join('\n');
 
   const userContent = `QUERY: ${query}\n\nCANDIDATES:\n${candidateText}`;
 

@@ -45,15 +45,10 @@ test('recall-returns-real-results: Step 3 shows formatted cards from /api/v1/sea
   // Click the first suggestion and assert real results render.
   await overlay.locator('.onb-suggestion').first().click();
 
-  // After click, the results container must render something real
-  // (not a perpetual spinner). Wait until the loading placeholder is
-  // replaced by either `.onb-result` cards or a user-visible message.
-  await page.waitForFunction(() => {
-    const box = document.querySelector('#onb-recall-results');
-    if (!box) return false;
-    const html = box.innerHTML || '';
-    return html.length > 0 && !html.includes('…');
-  }, null, { timeout: 15_000 });
+  // After click, the loading placeholder should be replaced by rendered
+  // result content. Waiting for the actual result node is more stable than
+  // inspecting raw HTML because summaries may legitimately contain ellipses.
+  await expect(overlay.locator('#onb-recall-results .onb-result').first()).toBeVisible({ timeout: 15_000 });
 
   // At minimum, the results box should have visible children (card or empty
   // notice). We don't pin the exact count — the real daemon decides, and

@@ -165,7 +165,7 @@ function _buildInitPerception(indexer, allCards) {
       type: 'guard',
       title: card.title || '',
       card_id: card.id,
-      message: `⚠️ Known pitfall: ${card.title} — ${(card.summary || '').slice(0, 300)}`,
+      message: `⚠️ Known pitfall: ${card.title} — ${card.summary || ''}`,
     });
   }
 

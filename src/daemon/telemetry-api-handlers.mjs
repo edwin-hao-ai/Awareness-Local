@@ -4,6 +4,7 @@
  * Endpoints:
  *   GET    /api/v1/telemetry/status   — {enabled, installation_id}
  *   POST   /api/v1/telemetry/enable   — {enabled: boolean} (also persists to config.telemetry.enabled)
+ *   POST   /api/v1/telemetry/track    — {event_type, properties?} forward to core Telemetry.track()
  *   GET    /api/v1/telemetry/recent   — list last 50 queued/unsent events
  *   DELETE /api/v1/telemetry/data     — clear local queue + request server-side delete
  */
@@ -62,5 +63,30 @@ export async function apiTelemetryDelete(_daemon, _req, res) {
   const tel = getTelemetry();
   if (!tel) return jsonResponse(res, { ok: false, error: 'telemetry not initialized' }, 503);
   await tel.deleteLocal();
+  return jsonResponse(res, { ok: true });
+}
+
+/**
+ * POST /api/v1/telemetry/track — forward a browser-side event into the local queue.
+ * Used by web onboarding (steps.js) so that onboarding_step, onboarding_completed,
+ * onboarding_skipped events are queued exactly like server-side events.
+ *
+ * Body: { event_type: string, properties?: Record<string,unknown> }
+ */
+export async function apiTelemetryTrack(_daemon, req, res) {
+  let body = {};
+  try {
+    const raw = await readBody(req);
+    if (raw) body = JSON.parse(raw);
+  } catch {
+    return jsonResponse(res, { error: 'Invalid JSON' }, 400);
+  }
+  const { event_type, properties } = body;
+  if (!event_type || typeof event_type !== 'string') {
+    return jsonResponse(res, { error: 'event_type must be a non-empty string' }, 400);
+  }
+  const tel = getTelemetry();
+  if (!tel) return jsonResponse(res, { ok: false, error: 'telemetry not initialized' }, 503);
+  tel.track(event_type, typeof properties === 'object' && properties !== null ? properties : {});
   return jsonResponse(res, { ok: true });
 }

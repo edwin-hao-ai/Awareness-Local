@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.6.8] - 2026-04-16
+
+### Changed
+- **Category-aware natural prompts** — replaced the rigid WHAT/WHY/HOW/CONTEXT/EVIDENCE template with per-category guidance (decision→alternatives+trade-offs; problem_solution→symptom+fix+files; personal_preference→preference+scope+examples). LLMs now write naturally structured Markdown entries.
+- **All SDK surfaces aligned** — extraction quality guidance synchronized across local daemon, awareness-spec.json write_guide, record-rule injection, harness-builder fallback, OpenClaw tools.ts, and Claude Code SKILL.md.
+
+## [0.6.7] - 2026-04-16
+
+### Added
+- **Skill outcome validation (F-043)** — `awareness_mark_skill_used` now accepts `outcome` parameter (success/partial/failed). Outcomes adjust decay score, confidence tracking, and consecutive failure counting. 3+ consecutive failures auto-flag skill as `needs_review`.
+- **SQLite migration** — `confidence` (REAL DEFAULT 1.0) and `consecutive_failures` (INTEGER DEFAULT 0) columns added to skills table.
+
+### Changed
+- **Wiki-style knowledge cards** — extraction prompts now produce rich 200-800 char Markdown entries instead of one-sentence summaries. Each category (decision, problem_solution, personal_preference, etc.) has natural structure guidance, no rigid template.
+- **Removed all summary truncation** — 22 `.slice()`/`[:N]` truncations removed across daemon, indexer, reranker, and mcp-handlers. Summary is the primary vector search content; truncation destroyed recall quality.
+- **Higher relevance threshold** — `CARD_RELEVANCE_THRESHOLD` raised from 0.3 to 0.5 to filter noise. Context injects max 8 cards (was 20) with progressive reduction under token budget.
+- **Card evolution** — UPDATE and CONTRADICTION paths now merge old card content instead of discarding, with anti-nesting protection.
+- **Category-aware minimum length** — personal categories (30 chars min), technical categories (100 chars min) enforced before card storage.
+
+## [0.6.6] - 2026-04-15
+
+### Changed
+- **Local daemon now returns `_extraction_instruction` when insights are missing** — `awareness_record` on the local daemon now mirrors the cloud MCP flow. When a caller submits rich content without pre-extracted insights, the daemon returns a structured extraction instruction so the client LLM can extract cards/tasks/risks and submit them back with `submit_insights`.
+- **Knowledge card writes are now compatible with salience metadata** — the SQLite upsert path accepts `novelty_score` and `salience_reason` without breaking older callers that do not send those fields. This fixes write failures in recall, wiki, cloud-sync, and alignment scenarios after the salience-aware schema expansion.
+- **Device-auth links are hardened in both onboarding and the Sync panel** — the UI now prefers `verification_url` when present, shows a retry state on upstream 502s, and defangs unsafe schemes like `javascript:` to `about:blank` instead of opening a broken or dangerous URL.
+
+### Tested
+- `bash scripts/ship-gate.sh` — passed (L1 guards, `sdks/local` integration suite, AwarenessClaw desktop Vitest coverage, L3 device-auth failure tests, L4 zero-mock journeys).
+- `node --test test/f031-alignment.test.mjs`
+- `node --test test/session-context-recall.test.mjs test/recall-context-comparison.test.mjs test/memory-store-compat.test.mjs`
+
+## [0.6.5] - 2026-04-15
+
+### Changed
+- **Salience-aware extraction guidance**: bundled `awareness-spec.json` now includes HIGH_SALIENCE signals and `novelty_score`/`salience_reason` fields in `write_guide`. Local daemon users now receive the same extraction quality improvements as cloud MCP users.
+
 ## [0.6.4] - 2026-04-15
 
 ### Added — Skill export (F-032 extension)

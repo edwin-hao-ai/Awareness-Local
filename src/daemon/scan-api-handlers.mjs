@@ -12,6 +12,7 @@
 
 import { jsonResponse, readBody } from './helpers.mjs';
 import { loadScanConfig, saveScanConfig } from '../core/scan-config.mjs';
+import { track } from '../core/telemetry.mjs';
 
 // ---------------------------------------------------------------------------
 // GET /api/v1/scan/status
@@ -50,7 +51,10 @@ export async function apiScanTrigger(daemon, req, res) {
 
   // Trigger scan in background (non-blocking)
   if (typeof daemon.triggerScan === 'function') {
-    daemon.triggerScan(mode).catch(err => {
+    daemon.triggerScan(mode).then((result) => {
+      const fileBucket = result?.total_files > 1000 ? '1000+' : result?.total_files > 100 ? '100-1000' : '<100';
+      track('project_scanned', { file_count_bucket: fileBucket, mode });
+    }).catch(err => {
       console.error('[scan-api] trigger error:', err.message);
     });
   }

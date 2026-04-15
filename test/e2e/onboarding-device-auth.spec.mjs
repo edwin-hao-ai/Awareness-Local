@@ -79,3 +79,86 @@ test('javascript: in verification_uri is defanged (XSS regression)', async ({ pa
   expect(href.startsWith('javascript:')).toBe(false);
   expect(href).toMatch(/^about:blank/);
 });
+
+test('Step 5 shows retry UI on 502 auth-start and does not open an undefined verification URL', async ({ page }) => {
+  await freshSession(page);
+
+  let openBrowserCalls = 0;
+  await page.route('**/api/v1/cloud/auth/start', async (route) => {
+    await route.fulfill({
+      status: 502,
+      contentType: 'text/html',
+      body: '<html><body>502 Bad Gateway</body></html>',
+    });
+  });
+  await page.route('**/api/v1/cloud/auth/open-browser', async (route) => {
+    openBrowserCalls += 1;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
+  });
+
+  await page.goto('/');
+  const overlay = page.locator('#awareness-onboarding');
+  await expect(overlay).toBeVisible({ timeout: 8_000 });
+
+  await page.evaluate(() => {
+    localStorage.setItem('awareness_onboarding_step', '5');
+  });
+  await page.evaluate(() => window.AwarenessOnboarding?.launch?.());
+
+  await overlay.locator('button[data-action="connect"]').click();
+
+  await expect(overlay.locator('.onb-modal')).toContainText(/authorization failed|retry/i, {
+    timeout: 5_000,
+  });
+  await expect(overlay.locator('[data-retry]')).toBeVisible();
+  await expect(overlay.locator('a.onb-link')).toHaveCount(0);
+  expect(openBrowserCalls).toBe(0);
+});
+
+test('Sync panel device-auth uses verification_url safely and defangs javascript URLs', async ({ page }) => {
+  await freshSession(page);
+
+  let openBrowserPayload = null;
+  await page.route('**/api/v1/sync/status', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ cloud_enabled: false, history: [] }),
+    });
+  });
+  await page.route('**/api/v1/sync/recent', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+  });
+  await page.route('**/api/v1/cloud/auth/start', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        user_code: 'SYNC-1234',
+        verification_uri: 'javascript:alert(1)',
+        device_code: 'sync-dev',
+        interval: 30,
+      }),
+    });
+  });
+  await page.route('**/api/v1/cloud/auth/open-browser', async (route) => {
+    openBrowserPayload = await route.request().postDataJSON();
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
+  });
+  await page.route('**/api/v1/cloud/auth/poll', async (route) => {
+    await route.fulfill({ status: 408, contentType: 'application/json', body: '{"status":"pending"}' });
+  });
+
+  await page.goto('/');
+  await page.evaluate(() => {
+    localStorage.setItem('awareness_onboarding_completed_at', new Date().toISOString());
+  });
+  await page.reload();
+
+  await page.locator('button.top-tab[data-tab="sync"]').click();
+  await page.locator('.sync-status-box button.btn').click();
+  await page.getByText('Start Connection', { exact: true }).click();
+
+  await expect(page.locator('#auth-link')).toHaveAttribute('href', /^about:blank/);
+  expect(openBrowserPayload).toEqual({ url: 'about:blank' });
+});

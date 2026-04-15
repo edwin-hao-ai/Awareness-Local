@@ -2665,9 +2665,13 @@ async function startDeviceAuth() {
     if (!data?.user_code) throw new Error('Failed to start auth');
     document.getElementById('auth-code').textContent = data.user_code;
     const link = document.getElementById('auth-link');
-    link.href = data.verification_uri + '?code=' + data.user_code;
-    link.textContent = data.verification_uri;
-    api('/cloud/auth/open-browser', { method: 'POST', body: JSON.stringify({ url: link.href }) }).catch(() => window.open(link.href, '_blank'));
+    const uiReadyUrl = data.verification_url || (data.user_code ? `${data.verification_uri}?code=${encodeURIComponent(data.user_code)}` : data.verification_uri);
+    const safeUrl = /^https?:\/\//i.test(String(uiReadyUrl || '')) ? String(uiReadyUrl) : 'about:blank';
+    link.href = safeUrl;
+    link.textContent = safeUrl;
+    api('/cloud/auth/open-browser', { method: 'POST', body: JSON.stringify({ url: safeUrl }) }).catch(() => {
+      if (safeUrl !== 'about:blank') window.open(safeUrl, '_blank');
+    });
     const result = await api('/cloud/auth/poll', { method: 'POST', body: JSON.stringify({ device_code: data.device_code, interval: data.interval || 5 }) });
     if (result?.api_key) {
       _authApiKey = result.api_key;

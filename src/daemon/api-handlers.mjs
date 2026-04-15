@@ -9,8 +9,9 @@ import {
 } from './scan-api-handlers.mjs';
 import {
   apiTelemetryStatus, apiTelemetryEnable,
-  apiTelemetryRecent, apiTelemetryDelete,
+  apiTelemetryRecent, apiTelemetryDelete, apiTelemetryTrack,
 } from './telemetry-api-handlers.mjs';
+import { track } from '../core/telemetry.mjs';
 
 export async function handleApiRoute(daemon, req, res, url) {
   const route = url.pathname.replace('/api/v1', '');
@@ -80,6 +81,10 @@ export async function handleApiRoute(daemon, req, res, url) {
 
   if (route.startsWith('/cloud/memories') && req.method === 'GET') {
     return apiCloudListMemories(daemon, req, res, url);
+  }
+
+  if (route === '/cloud/profile' && req.method === 'POST') {
+    return apiCloudGetProfile(daemon, req, res, url);
   }
 
   if (route === '/cloud/connect' && req.method === 'POST') {
@@ -203,6 +208,10 @@ export async function handleApiRoute(daemon, req, res, url) {
   }
   if (route === '/telemetry/data' && req.method === 'DELETE') {
     return apiTelemetryDelete(daemon, req, res);
+  }
+
+  if (route === '/telemetry/track' && req.method === 'POST') {
+    return apiTelemetryTrack(daemon, req, res);
   }
 
   return jsonResponse(res, { error: 'Not found', route }, 404);
@@ -539,6 +548,7 @@ export async function apiCloudAuthStart(daemon, _req, res) {
   const apiBase = config?.cloud?.api_base || 'https://awareness.market/api/v1';
   try {
     const data = await daemon._httpJson('POST', `${apiBase}/auth/device/init`, {});
+    track('cloud_auth_initiated', { from_step: 'onboarding' });
     // Enrich response with headless hint + UI-ready verification URL so
     // callers (AwarenessClaw Memory UI, setup wizard, etc.) know whether
     // to skip their own "open browser" attempt.
@@ -607,6 +617,32 @@ export async function apiCloudListMemories(daemon, _req, res, url) {
   }
 }
 
+export async function apiCloudGetProfile(daemon, _req, res, url) {
+  const config = daemon._loadConfig();
+  let params = {};
+  try {
+    const raw = await readBody(_req);
+    if (raw) params = JSON.parse(raw);
+  } catch {
+    return jsonResponse(res, { error: 'Invalid JSON' }, 400);
+  }
+
+  const apiKey = params.api_key || config?.cloud?.api_key;
+  if (!apiKey) {
+    return jsonResponse(res, { error: 'Cloud not configured. Connect via /api/v1/cloud/connect first.' }, 400);
+  }
+
+  const apiBase = config?.cloud?.api_base || 'https://awareness.market/api/v1';
+  try {
+    const data = await daemon._httpJson('GET', `${apiBase}/users/me`, null, {
+      'Authorization': `Bearer ${apiKey}`,
+    });
+    return jsonResponse(res, data);
+  } catch (err) {
+    return jsonResponse(res, { error: 'Failed to fetch profile: ' + err.message }, 502);
+  }
+}
+
 export async function apiCloudConnect(daemon, req, res) {
   const body = await readBody(req);
   let params;
@@ -631,6 +667,7 @@ export async function apiCloudConnect(daemon, req, res) {
   if (daemon.cloudSync) {
     daemon.cloudSync.stop();
   }
+  track('cloud_auth_completed', {});
   try {
     const { CloudSync } = await import('../core/cloud-sync.mjs');
     daemon.cloudSync = new CloudSync(config, daemon.indexer, daemon.memoryStore);

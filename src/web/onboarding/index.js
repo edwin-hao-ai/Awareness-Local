@@ -35,7 +35,26 @@
       overlayEl.remove();
       overlayEl = null;
     }
-    if (markComplete) State.markCompleted();
+    if (markComplete) {
+      State.markCompleted();
+      const skippedSteps = State.skippedSteps();
+      if (skippedSteps.length > 0) {
+        trackOnboarding('onboarding_skipped', { skipped_steps: skippedSteps, at_step: State.currentStep() });
+      } else {
+        trackOnboarding('onboarding_completed', { at_step: State.currentStep() });
+      }
+    }
+  }
+
+  /** Fire-and-forget telemetry via local daemon endpoint. Silent on failure. */
+  function trackOnboarding(event_type, properties) {
+    try {
+      fetch('/api/v1/telemetry/track', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event_type, properties }),
+      }).catch(() => {});
+    } catch { /* non-fatal */ }
   }
 
   async function getProjectDir() {
@@ -118,6 +137,8 @@
   // ── Step flow ─────────────────────────────────────────────────────
   function go(stepN) {
     State.setStep(stepN);
+    // Track step entry — fire-and-forget, never blocks navigation
+    trackOnboarding('onboarding_step', { step_number: stepN });
     const root = ensureOverlay();
     switch (stepN) {
       case 1:

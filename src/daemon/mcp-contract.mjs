@@ -268,11 +268,12 @@ export function getToolDefinitions() {
     },
     {
       name: 'awareness_mark_skill_used',
-      description: 'Mark a skill as used — resets decay timer and increments usage counter.',
+      description: 'Mark a skill as used and report outcome — resets decay timer and increments usage counter. Pass outcome to close the feedback loop: "success" (default) fully resets decay, "partial" gives reduced boost, "failed" decreases confidence. 3+ consecutive failures auto-flag skill for review.',
       inputSchema: {
         type: 'object',
         properties: {
           skill_id: { type: 'string', description: 'The ID of the skill to mark as used' },
+          outcome: { type: 'string', enum: ['success', 'partial', 'failed'], description: 'Outcome of applying the skill. Default: "success"', default: 'success' },
         },
         required: ['skill_id'],
       },

@@ -293,6 +293,78 @@ async function cmdStart(flags) {
     // Background mode: spawn self with --foreground
     const thisFile = fileURLToPath(import.meta.url);
     const logPath = path.join(awarenessDir, LOG_FILENAME);
+
+    // Startup dedup lock: prevent concurrent cmdStart calls from spawning multiple
+    // daemon processes during the startup window (before the daemon has bound its port
+    // and the probeAwarenessDaemon check can see it).
+    // fs.openSync with 'wx' is atomic on POSIX — exactly one process wins.
+    const lockPath = path.join(awarenessDir, 'daemon.starting');
+    let lockAcquired = false;
+    try {
+      const lockFd = fs.openSync(lockPath, 'wx');
+      fs.writeSync(lockFd, String(process.pid));
+      fs.closeSync(lockFd);
+      lockAcquired = true;
+    } catch (e) {
+      if (e.code === 'EEXIST') {
+        // Another cmdStart already holds the lock — check if its spawner is still alive.
+        let lockOwnerAlive = false;
+        try {
+          const lockContent = fs.readFileSync(lockPath, 'utf-8').trim();
+          const lockPid = parseInt(lockContent, 10);
+          if (!isNaN(lockPid)) {
+            try { process.kill(lockPid, 0); lockOwnerAlive = true; } catch { /* gone */ }
+          }
+        } catch { /* unreadable lock — treat as stale */ }
+
+        if (lockOwnerAlive) {
+          // Another process is actively starting the daemon; wait for it rather than spawning.
+          console.log('Starting Awareness Local daemon...');
+          let waited = false;
+          for (let i = 0; i < 30; i++) {
+            await new Promise((r) => setTimeout(r, 500));
+            const alive = await probeAwarenessDaemon(port);
+            if (alive) {
+              const newPid = readPid(projectDir);
+              console.log(`Awareness Local daemon started (PID ${newPid || alive.pid}, port ${port})`);
+              console.log(`  MCP endpoint: http://localhost:${port}/mcp`);
+              console.log(`  Dashboard:    http://localhost:${port}/`);
+              console.log(`  Log file:     ${logPath}`);
+              waited = true;
+              break;
+            }
+            // If lock disappeared the spawner exited — do one final probe then give up waiting.
+            if (!fs.existsSync(lockPath)) {
+              const alive2 = await probeAwarenessDaemon(port);
+              if (alive2) {
+                const newPid = readPid(projectDir);
+                console.log(`Awareness Local daemon started (PID ${newPid || alive2.pid}, port ${port})`);
+                console.log(`  MCP endpoint: http://localhost:${port}/mcp`);
+                console.log(`  Dashboard:    http://localhost:${port}/`);
+                console.log(`  Log file:     ${logPath}`);
+                waited = true;
+              }
+              break;
+            }
+          }
+          if (waited) process.exit(0);
+          // Spawner held the lock but daemon never became healthy — fall through to retry.
+        } else {
+          // Stale lock (spawner process is gone) — remove it and proceed.
+          try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
+        }
+
+        // Try to acquire the lock ourselves now.
+        try {
+          const lockFd = fs.openSync(lockPath, 'wx');
+          fs.writeSync(lockFd, String(process.pid));
+          fs.closeSync(lockFd);
+          lockAcquired = true;
+        } catch { /* still contested — proceed without lock */ }
+      }
+      // Other errors (permissions etc.): proceed without lock.
+    }
+
     const logFd = fs.openSync(logPath, 'a');
 
     const child = spawn(
@@ -319,6 +391,11 @@ async function cmdStart(flags) {
         healthy = true;
         break;
       }
+    }
+
+    // Release startup lock regardless of outcome.
+    if (lockAcquired) {
+      try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
     }
 
     if (healthy) {

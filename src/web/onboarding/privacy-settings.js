@@ -69,6 +69,8 @@
 
     wrap.querySelector('#awareness-privacy-delete').addEventListener('click', async () => {
       if (!confirm(t('privacy.confirm_delete') || 'Delete all telemetry data for this installation?')) return;
+      // Second confirmation — this action is irreversible
+      if (!confirm(t('privacy.confirm_delete_final') || 'This is permanent and cannot be undone. All telemetry history for this device will be erased. Continue?')) return;
       await fetchJson('/api/v1/telemetry/data', { method: 'DELETE' });
       const pre = wrap.querySelector('#awareness-privacy-events');
       pre.style.display = 'block';

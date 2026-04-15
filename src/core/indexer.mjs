@@ -365,6 +365,10 @@ export class Indexer {
     // F-038 T-005.5: Add recall_count to knowledge_cards
     this._migrateRecallCount();
     this._migrateGraphNodesSyncHash();
+    // Add novelty_score + salience_reason for HIGH_SALIENCE quality gating
+    this._migrateNoveltyScore();
+    // F-043: Add confidence + consecutive_failures for outcome feedback loop
+    this._migrateSkillOutcomeFields();
   }
 
   /**
@@ -484,6 +488,34 @@ export class Indexer {
       this.db.exec('ALTER TABLE knowledge_cards ADD COLUMN recall_count INTEGER DEFAULT 0');
     } catch {
       // Column already exists — expected on subsequent runs
+    }
+  }
+
+  /**
+   * Add novelty_score and salience_reason columns for HIGH_SALIENCE quality gating.
+   * These fields are extracted by client LLMs and used for dedup/quality filtering.
+   */
+  _migrateNoveltyScore() {
+    const migrations = [
+      'ALTER TABLE knowledge_cards ADD COLUMN novelty_score REAL',
+      "ALTER TABLE knowledge_cards ADD COLUMN salience_reason TEXT",
+    ];
+    for (const sql of migrations) {
+      try { this.db.exec(sql); } catch { /* column already exists */ }
+    }
+  }
+
+  /**
+   * F-043: Add confidence and consecutive_failures columns to skills table
+   * for outcome-based feedback loop (success/partial/failed).
+   */
+  _migrateSkillOutcomeFields() {
+    const migrations = [
+      'ALTER TABLE skills ADD COLUMN confidence REAL DEFAULT 1.0',
+      'ALTER TABLE skills ADD COLUMN consecutive_failures INTEGER DEFAULT 0',
+    ];
+    for (const sql of migrations) {
+      try { this.db.exec(sql); } catch { /* column already exists */ }
     }
   }
 
@@ -620,14 +652,16 @@ export class Indexer {
                                    last_touched_at, link_count_incoming, link_count_outgoing,
                                    created_at, filepath,
                                    cloud_id, version, schema_version, sync_status,
-                                   last_pushed_at, last_pulled_at)
+                                   last_pushed_at, last_pulled_at,
+                                   novelty_score, salience_reason)
       VALUES (@id, @category, @title, @summary, @source_memories,
               @confidence, @status, @tags, @source, @parent_card_id,
               @evolution_type, @card_type, @growth_stage,
               @last_touched_at, @link_count_incoming, @link_count_outgoing,
               @created_at, @filepath,
               @cloud_id, @version, @schema_version, @sync_status,
-              @last_pushed_at, @last_pulled_at)
+              @last_pushed_at, @last_pulled_at,
+              @novelty_score, @salience_reason)
       ON CONFLICT(id) DO UPDATE SET
         category        = excluded.category,
         title           = excluded.title,
@@ -650,7 +684,9 @@ export class Indexer {
         schema_version  = excluded.schema_version,
         sync_status     = excluded.sync_status,
         last_pushed_at  = excluded.last_pushed_at,
-        last_pulled_at  = excluded.last_pulled_at
+        last_pulled_at  = excluded.last_pulled_at,
+        novelty_score   = excluded.novelty_score,
+        salience_reason = excluded.salience_reason
     `);
 
     this._stmtDeleteKnowledgeFts = this.db.prepare(
@@ -848,6 +884,11 @@ export class Indexer {
       sync_status: card.sync_status || 'pending_push',
       last_pushed_at: card.last_pushed_at || null,
       last_pulled_at: card.last_pulled_at || null,
+      novelty_score:
+        typeof card.novelty_score === 'number'
+          ? card.novelty_score
+          : null,
+      salience_reason: card.salience_reason || null,
     };
 
     const upsert = this.db.transaction(() => {
@@ -1003,7 +1044,7 @@ export class Indexer {
     if (members.length === 0) return;
 
     const memberList = members
-      .map((m, i) => `${i + 1}. [${m.category}] ${m.title}: ${(m.summary || '').substring(0, 100)}`)
+      .map((m, i) => `${i + 1}. [${m.category}] ${m.title}: ${m.summary || ''}`)
       .join('\n');
 
     const systemPrompt = `You are naming a topic cluster for a personal knowledge base.

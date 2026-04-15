@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import {
   apiCloudAuthStart,
   apiCloudAuthPoll,
+  apiCloudGetProfile,
 } from '../src/daemon/api-handlers.mjs';
 
 // ---------------------------------------------------------------------------
@@ -71,6 +72,12 @@ function fakeDaemon({ onPost, configOverride } = {}) {
     },
     _calls: calls,
   };
+}
+
+function timeoutError(message = 'timed out') {
+  const err = new Error(message);
+  err.code = 'ETIMEDOUT';
+  return err;
 }
 
 // ---------------------------------------------------------------------------
@@ -316,5 +323,97 @@ describe('apiCloudAuthPoll', () => {
     await apiCloudAuthPoll(daemon, mockReq('not json'), res);
 
     assert.equal(res.status, 400);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// apiCloudGetProfile
+// ---------------------------------------------------------------------------
+
+describe('apiCloudGetProfile', () => {
+  it('returns the user profile when api_key is provided in POST body', async () => {
+    const daemon = fakeDaemon({
+      onPost: ({ method, url, body }) => {
+        assert.equal(method, 'GET');
+        assert.equal(url, 'https://backend.test/api/v1/users/me');
+        assert.deepEqual(body, null);
+        return { email: 'test@example.com', id: 'user_123' };
+      },
+    });
+    const res = mockRes();
+
+    await apiCloudGetProfile(daemon, mockReq({ api_key: 'aw_token' }), res, new URL('http://127.0.0.1/api/v1/cloud/profile'));
+
+    assert.equal(res.status, 200);
+    assert.equal(res.json.email, 'test@example.com');
+    assert.equal(daemon._calls.length, 1);
+  });
+
+  it('falls back to configured api_key when POST body is empty', async () => {
+    const daemon = fakeDaemon({
+      configOverride: {
+        cloud: {
+          api_base: 'https://backend.test/api/v1',
+          api_key: 'from-config',
+        },
+      },
+      onPost: () => ({ email: 'config@example.com' }),
+    });
+    const res = mockRes();
+
+    await apiCloudGetProfile(daemon, mockReq({}), res, new URL('http://127.0.0.1/api/v1/cloud/profile'));
+
+    assert.equal(res.status, 200);
+    assert.equal(res.json.email, 'config@example.com');
+  });
+
+  it('returns 400 on invalid JSON body', async () => {
+    const daemon = fakeDaemon();
+    const res = mockRes();
+
+    await apiCloudGetProfile(daemon, mockReq('not json'), res, new URL('http://127.0.0.1/api/v1/cloud/profile'));
+
+    assert.equal(res.status, 400);
+    assert.match(res.json.error, /invalid json/i);
+  });
+
+  it('returns 400 when no api_key is available', async () => {
+    const daemon = fakeDaemon({
+      configOverride: { cloud: { api_base: 'https://backend.test/api/v1' } },
+    });
+    const res = mockRes();
+
+    await apiCloudGetProfile(daemon, mockReq({}), res, new URL('http://127.0.0.1/api/v1/cloud/profile'));
+
+    assert.equal(res.status, 400);
+    assert.match(res.json.error, /cloud not configured/i);
+  });
+
+  it('returns 502 when upstream returns a 5xx-style error', async () => {
+    const daemon = fakeDaemon({
+      onPost: () => {
+        throw new Error('HTTP 502 https://backend.test/api/v1/users/me — <html>Bad Gateway</html>');
+      },
+    });
+    const res = mockRes();
+
+    await apiCloudGetProfile(daemon, mockReq({ api_key: 'aw_token' }), res, new URL('http://127.0.0.1/api/v1/cloud/profile'));
+
+    assert.equal(res.status, 502);
+    assert.match(res.json.error, /502/);
+  });
+
+  it('returns 502 when upstream times out', async () => {
+    const daemon = fakeDaemon({
+      onPost: () => {
+        throw timeoutError('upstream timed out');
+      },
+    });
+    const res = mockRes();
+
+    await apiCloudGetProfile(daemon, mockReq({ api_key: 'aw_token' }), res, new URL('http://127.0.0.1/api/v1/cloud/profile'));
+
+    assert.equal(res.status, 502);
+    assert.match(res.json.error, /timed out/i);
   });
 });

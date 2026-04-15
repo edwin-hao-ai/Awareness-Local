@@ -851,7 +851,7 @@ export class KnowledgeExtractor {
         try { methods = JSON.parse(skill.methods || '[]'); } catch { methods = []; }
         const newStep = {
           step: methods.length + 1,
-          description: `[Auto-evolved] ${card.title}: ${(card.summary || '').slice(0, 200)}`,
+          description: `[Auto-evolved] ${card.title}: ${card.summary || ''}`,
         };
         methods.push(newStep);
 

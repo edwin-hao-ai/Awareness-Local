@@ -151,6 +151,12 @@ export class SearchEngine {
       current_source,   // caller's source identifier (e.g. 'claude-code', 'openclaw-plugin')
     } = params;
 
+    // Fire-and-forget telemetry for recall mode usage analytics
+    try {
+      const { track } = await import('./telemetry.mjs');
+      track('recall_mode_used', { mode: recall_mode, scope });
+    } catch { /* non-fatal */ }
+
     // Progressive disclosure Phase 2: return full content for specified IDs
     if (detail === 'full' && ids?.length) {
       return this.getFullContent(ids);

@@ -77,3 +77,29 @@ test('"View recent events" expands the events pane', async ({ page }) => {
   await expect(pane).toBeVisible();
   await expect(pane).toContainText('daemon_started');
 });
+
+test('deleting telemetry requires two confirmations before issuing DELETE', async ({ page }) => {
+  await stubTelemetry(page, { enabled: true });
+  await freshSession(page);
+
+  let deleteCalls = 0;
+  await page.route('**/api/v1/telemetry/data', async (route) => {
+    deleteCalls += 1;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
+  });
+
+  const dialogs = [];
+  page.on('dialog', async (dialog) => {
+    dialogs.push(dialog.message());
+    await dialog.accept();
+  });
+
+  await page.goto('/');
+  await openSettings(page);
+  await page.locator('#awareness-privacy-delete').click();
+
+  await page.waitForTimeout(500);
+  expect(dialogs.length).toBe(2);
+  expect(deleteCalls).toBe(1);
+  await expect(page.locator('#awareness-privacy-events')).toContainText(/Local queue cleared|Server-side delete requested/);
+});
