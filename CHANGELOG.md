@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.2] - 2026-04-15
+
+### Fixed
+- **`undefined?code=undefined` opens in the browser when cloud backend is unreachable** — `cloud-http.mjs` used to resolve with the raw HTML 502 body on non-2xx statuses. Downstream destructuring read all fields as `undefined`, then the onboarding `startDeviceAuth` built a bogus link. Non-2xx responses now reject with a clear `HTTP <status> <url> — <preview>` error so the onboarding catches it and shows the Retry banner instead.
+- 5 new unit tests in `test/cloud-http.test.mjs` pin this contract (200/204/500/502 + header forwarding).
+
 ## [0.6.1] - 2026-04-15
 
 ### Fixed
