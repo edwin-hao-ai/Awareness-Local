@@ -14,7 +14,8 @@ function load({ fetchImpl, locale } = {}) {
   const ctx = makeSandbox({ fetchImpl });
   installBaseI18n(ctx, { en: EN, zh: EN });
   if (locale) ctx.currentLocale = locale;
-  loadModules(ctx, ['recall-suggestions.js']);
+  // Formatter must load before recall-suggestions (used by runRecall/getSuggestions).
+  loadModules(ctx, ['result-formatter.js', 'recall-suggestions.js']);
   return ctx.AwarenessOnboardingRecall;
 }
 
@@ -178,46 +179,75 @@ test('loadScanMeta: extracts wiki_titles from scan/files wiki category', async (
 
 // ── runRecall normalization ───────────────────────────────────────
 
+test('runRecall: hits GET /api/v1/search, not the phantom /recall endpoint', async () => {
+  // Regression for F-040 endpoint drift: the daemon has no REST /recall
+  // route. Step-3 onboarding must call GET /api/v1/search.
+  let captured = null;
+  const R = load({
+    fetchImpl: async (url) => {
+      captured = url;
+      return { ok: true, json: async () => ({ items: [] }) };
+    },
+  });
+  await R.runRecall('hello world', 2);
+  assert.ok(
+    captured && captured.includes('/api/v1/search?'),
+    `expected /api/v1/search, got ${captured}`,
+  );
+  assert.ok(captured.includes('q=hello%20world'), 'query must be URL-encoded');
+  // Daemon is over-fetched (≥ 8 or caller limit) so the formatter has enough
+  // candidates to skip noisy items. Exact value is an implementation detail.
+  assert.ok(/limit=\d+/.test(captured), 'URL must include a limit parameter');
+  assert.ok(
+    !captured.includes('/api/v1/recall'),
+    'must NOT use the non-existent /recall route',
+  );
+});
+
 test('runRecall: accepts {items}, {results}, {memories} shapes', async () => {
+  // runRecall now returns { items, meta }; verify non-empty items for each
+  // top-level key the daemon/search endpoint might return.
   for (const shape of [
-    { items: [{ title: 't1', summary: 's1' }] },
-    { results: [{ title: 't2', summary: 's2' }] },
-    { memories: [{ title: 't3', summary: 's3' }] },
+    { items: [{ title: 'title-one', summary: 'a readable summary with enough prose.', type: 'insight' }] },
+    { results: [{ title: 'title-two', summary: 'a readable summary with enough prose.', type: 'insight' }] },
+    { memories: [{ title: 'title-three', summary: 'a readable summary with enough prose.', type: 'insight' }] },
   ]) {
     const R = load({ fetchImpl: async () => ({ ok: true, json: async () => shape }) });
     const out = await R.runRecall('q');
-    assert.equal(out.length, 1);
-    assert.ok(out[0].title.startsWith('t'));
+    assert.equal(out.items.length, 1, `shape=${Object.keys(shape)[0]}`);
+    assert.ok(out.items[0].title.startsWith('title-'));
+    assert.equal(typeof out.meta.elapsedMs, 'number');
   }
 });
 
-test('runRecall: 500 response → empty array (no throw)', async () => {
+test('runRecall: 500 response → empty items, zero elapsedMs recorded', async () => {
   const R = load({ fetchImpl: async () => ({ ok: false, json: async () => ({}) }) });
   const out = await R.runRecall('q');
-  eq(out, []);
+  eq(out.items, []);
+  assert.equal(typeof out.meta.elapsedMs, 'number');
 });
 
-test('runRecall: fetch throws → empty array', async () => {
+test('runRecall: fetch throws → empty items', async () => {
   const R = load({ fetchImpl: async () => { throw new Error('net'); } });
   const out = await R.runRecall('q');
-  eq(out, []);
+  eq(out.items, []);
 });
 
-test('runRecall: falls back from title to filepath to id', async () => {
+test('runRecall: falls back from title to filepath to id (via formatter)', async () => {
   const R = load({
     fetchImpl: async () => ({
       ok: true,
       json: async () => ({ items: [
-        { filepath: '/a.md', summary: 'x' },
-        { id: 'abc', summary: 'y' },
-        { summary: 'no title at all' },
+        { filepath: '/a/b/c/deep.md', summary: 'a clean readable line about a', type: 'workspace_file' },
+        { id: 'abc12345', title: 'abc12345', summary: 'an untitled card with a decent summary', type: 'insight' },
       ] }),
     }),
   });
   const out = await R.runRecall('q', 5);
-  assert.equal(out[0].title, '/a.md');
-  assert.equal(out[1].title, 'abc');
-  assert.equal(out[2].title, '(untitled)');
+  // deep.md (basename), abc12345 (id used as title)
+  const titles = out.items.map((x) => x.title);
+  assert.ok(titles.includes('deep.md'));
+  assert.ok(titles.includes('abc12345'));
 });
 
 function eq(a, b) { assert.equal(JSON.stringify(a), JSON.stringify(b)); }

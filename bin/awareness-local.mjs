@@ -86,25 +86,17 @@ function resolveProjectDir(flags) {
 }
 
 /**
- * Resolve the daemon port from flags or default.
+ * Resolve the daemon port from --port flag or default.
+ * Single-daemon policy: every project uses 37800 unless user forces otherwise.
+ * Workspace switching happens via POST /api/v1/workspace/switch, not new ports.
  * @param {Record<string, string|boolean>} flags
  * @returns {number}
  */
-function resolvePort(flags, projectDir) {
-  // Explicit --port flag takes priority
+function resolvePort(flags, _projectDir) {
   if (typeof flags.port === 'string') {
     const p = parseInt(flags.port, 10);
     if (!isNaN(p) && p > 0 && p < 65536) return p;
   }
-  // Check workspace registry for previously assigned port
-  try {
-    const wsFile = path.join(os.homedir(), '.awareness', 'workspaces.json');
-    if (fs.existsSync(wsFile)) {
-      const workspaces = JSON.parse(fs.readFileSync(wsFile, 'utf-8'));
-      const key = path.resolve(projectDir || process.cwd());
-      if (workspaces[key] && workspaces[key].port) return workspaces[key].port;
-    }
-  } catch { /* registry not available */ }
   return 37800;
 }
 
@@ -136,6 +128,61 @@ function httpGet(port, urlPath, timeoutMs = 3000) {
       resolve(null);
     });
   });
+}
+
+/**
+ * HTTP POST JSON to localhost.
+ * @param {number} port
+ * @param {string} urlPath
+ * @param {object} body
+ * @param {number} [timeoutMs=3000]
+ * @returns {Promise<{ status: number, body: string }|null>}
+ */
+function httpPostJson(port, urlPath, body, timeoutMs = 3000) {
+  const payload = Buffer.from(JSON.stringify(body || {}), 'utf-8');
+  return new Promise((resolve) => {
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port,
+        path: urlPath,
+        method: 'POST',
+        timeout: timeoutMs,
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': payload.length,
+        },
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf-8') });
+        });
+      }
+    );
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.write(payload);
+    req.end();
+  });
+}
+
+/**
+ * Probe a port to see if it already hosts an Awareness local daemon.
+ * Returns healthz info on success, or null when the port is free or
+ * occupied by something else.
+ * @param {number} port
+ * @returns {Promise<{ mode: string, pid: number, project_dir: string, version: string }|null>}
+ */
+async function probeAwarenessDaemon(port) {
+  const resp = await httpGet(port, '/healthz', 1500);
+  if (!resp || resp.status !== 200) return null;
+  try {
+    const info = JSON.parse(resp.body);
+    if (info && info.mode === 'local' && info.pid) return info;
+  } catch { /* not awareness */ }
+  return null;
 }
 
 /**
@@ -186,20 +233,40 @@ async function cmdStart(flags) {
   const awarenessDir = path.join(projectDir, AWARENESS_DIR);
   fs.mkdirSync(awarenessDir, { recursive: true });
 
-  // Register workspace (auto-allocates port if new)
+  // Record workspace usage (memoryId/lastUsed/name). Port is no longer
+  // allocated per-workspace — every workspace shares the default daemon port.
   try {
     const { registerWorkspace } = await import('../src/core/config.mjs');
     registerWorkspace(projectDir, { port });
   } catch { /* best-effort */ }
 
-  // Check if already running
-  const pid = readPid(projectDir);
-  if (pid && processExists(pid)) {
-    const resp = await httpGet(port, '/healthz');
-    if (resp && resp.status === 200) {
-      console.log(`Awareness Local daemon already running (PID ${pid}, port ${port})`);
+  // Single-daemon policy: if an Awareness daemon already runs on this port,
+  // switch its active workspace instead of spawning a duplicate on a new port.
+  const existing = await probeAwarenessDaemon(port);
+  if (existing) {
+    const existingDir = existing.project_dir ? path.resolve(existing.project_dir) : '';
+    if (existingDir === path.resolve(projectDir)) {
+      console.log(
+        `Awareness Local daemon already running (PID ${existing.pid}, port ${port})`
+      );
       process.exit(0);
     }
+    // Different project on same port → hot-switch.
+    const switchRes = await httpPostJson(port, '/api/v1/workspace/switch', {
+      project_dir: projectDir,
+    });
+    if (switchRes && switchRes.status === 200) {
+      console.log(
+        `Switched daemon workspace to ${projectDir} (PID ${existing.pid}, port ${port})`
+      );
+      process.exit(0);
+    }
+    console.error(
+      `[awareness-local] Port ${port} is held by another process but workspace switch failed:\n` +
+      `  ${switchRes ? `HTTP ${switchRes.status}: ${switchRes.body.slice(0, 200)}` : 'no response'}\n` +
+      `  Stop the existing daemon or pass --port <other> to run a second instance.`
+    );
+    process.exit(1);
   }
 
   if (foreground) {

@@ -21,6 +21,25 @@
     </div>`;
   }
 
+  /**
+   * Wire up the generic header buttons (skip-step / skip-all) inside `root`.
+   * Must be called from every step that used header() with a matching handler.
+   * Safe to call even when the handler is absent — it only binds present buttons.
+   */
+  function wireHeader(root, { onSkipStep, onSkipAll } = {}) {
+    if (onSkipAll) {
+      root.querySelectorAll('[data-action="skip-all"]').forEach((b) => {
+        b.onclick = onSkipAll;
+      });
+    }
+    if (onSkipStep) {
+      root.querySelectorAll('[data-action="skip-step"]').forEach((b) => {
+        // Don't clobber step-local skip-step bindings added by the step itself.
+        if (!b.onclick) b.onclick = onSkipStep;
+      });
+    }
+  }
+
   // ── Step 1: Welcome ─────────────────────────────────────────────────
   function renderWelcome(root, { onNext, onSkipAll }) {
     root.innerHTML = `
@@ -36,7 +55,7 @@
           <li>${esc(t('onb.welcome.bullet_cloud'))}</li>
         </ul>
         <label class="onb-telemetry-row" style="display:flex;align-items:flex-start;gap:8px;margin:14px 4px 4px;font-size:0.82rem;color:var(--text-secondary);cursor:pointer">
-          <input type="checkbox" id="onb-telemetry-opt" style="margin-top:3px">
+          <input type="checkbox" id="onb-telemetry-opt" checked style="margin-top:3px">
           <span>
             <strong style="color:var(--text-primary)">${esc(t('onb.welcome.telemetry_label'))}</strong><br>
             <span style="font-size:0.74rem">${esc(t('onb.welcome.telemetry_hint'))}</span>
@@ -136,16 +155,31 @@
         const q = btn.dataset.q;
         const box = root.querySelector('#onb-recall-results');
         box.innerHTML = '<div style="color:var(--text-muted)">…</div>';
-        const results = await runRecall(q);
-        box.innerHTML = `<div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:6px">${esc(t('onb.recall.results'))}</div>` +
-          (results.length
-            ? results.map((r) =>
-                `<div class="onb-result">
-                  <div class="onb-result-title">📄 ${esc(r.title)}</div>
-                  <div class="onb-result-summary">${esc((r.summary || '').slice(0, 160))}</div>
-                </div>`
-              ).join('')
-            : `<div class="onb-result">${esc(t('onb.recall.no_results'))}</div>`);
+        const res = await runRecall(q);
+        // runRecall now returns { items, meta } — support legacy shape too.
+        const items = Array.isArray(res) ? res : (res?.items || []);
+        const meta = (res && res.meta) || {};
+        const stats = (items.length && meta.elapsedMs !== undefined)
+          ? `<div class="onb-recall-stats">${esc(t('onb.recall.stats', {
+              ms: meta.elapsedMs,
+              hits: meta.raw_hits || items.length,
+              total: meta.total || meta.raw_hits || items.length,
+            }))}</div>`
+          : '';
+        const header = `<div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:6px">${esc(t('onb.recall.results'))}</div>`;
+        const body = items.length
+          ? items.map((r) => {
+              const rel = r.relativeTime ? ` · ${esc(r.relativeTime)}` : '';
+              const type = r.type ? `<span class="onb-result-type">${esc(r.type)}</span>` : '';
+              const icon = r.icon || '📄';
+              return `<div class="onb-result">
+                <div class="onb-result-meta">${type}${rel}</div>
+                <div class="onb-result-title">${icon} ${esc(r.title)}</div>
+                <div class="onb-result-summary">${esc(r.summary || '')}</div>
+              </div>`;
+            }).join('')
+          : `<div class="onb-result">${esc(t('onb.recall.no_results'))}</div>`;
+        box.innerHTML = stats + header + body;
       };
     });
   }
@@ -204,6 +238,8 @@
       </div>`;
     root.querySelector('[data-action="connect"]').onclick = onConnect;
     root.querySelector('[data-action="later"]').onclick = onLater;
+    // Header "skip, finish" button → same effect as "later": skip cloud + go to done.
+    wireHeader(root, { onSkipAll: onLater });
   }
 
   function renderAuthPending(root, { user_code, verification_uri, onCancel, onReopen }) {

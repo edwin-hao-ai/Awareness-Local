@@ -309,16 +309,12 @@ export function registerWorkspace(projectDir, opts = {}) {
     return workspaces[key];
   }
 
-  // New workspace — allocate port
-  const usedPorts = new Set(Object.values(workspaces).map(w => w.port));
-  let port = opts.port || BASE_PORT;
-  while (usedPorts.has(port)) {
-    port++;
-  }
-
+  // Single-daemon policy: every workspace shares the caller-provided port
+  // (default 37800). No per-workspace port auto-allocation — workspace
+  // switching happens via POST /api/v1/workspace/switch to the running daemon.
   const entry = {
     memoryId: opts.memoryId || '',
-    port,
+    port: opts.port || BASE_PORT,
     name: opts.name || path.basename(key),
     lastUsed: new Date().toISOString(),
   };

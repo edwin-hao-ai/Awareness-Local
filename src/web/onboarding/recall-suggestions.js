@@ -92,26 +92,65 @@
     return meta;
   }
 
-  /** Run a recall against the daemon, return normalized results. */
+  /** Run a recall against the daemon, return normalized results.
+   * Uses GET /api/v1/search — the real daemon endpoint. There is NO REST
+   * /recall route; recall is only exposed via MCP (awareness_recall tool).
+   * Returns { items, meta: { elapsedMs, total, raw_hits } } for the stats bar.
+   */
   async function runRecall(query, limit = 3) {
+    const started = Date.now();
     try {
-      const r = await fetch('/api/v1/recall', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, limit, detail: 'summary' }),
-      });
+      const url = `/api/v1/search?q=${encodeURIComponent(query)}&limit=${Math.max(limit, 8)}`;
+      const r = await fetch(url);
+      const elapsedMs = Date.now() - started;
+      if (!r.ok) return { items: [], meta: { elapsedMs, total: 0, raw_hits: 0 } };
+      const data = await r.json();
+      const raw = data?.items || data?.results || data?.memories || [];
+      const fmt = (typeof window !== 'undefined' && window.AwarenessOnboardingFormat) || null;
+      const items = fmt
+        ? fmt.formatResults(raw, { limit })
+        : raw.slice(0, limit).map((it) => ({
+            title: it.title || it.filepath || it.id || '(untitled)',
+            summary: it.summary || it.content || '',
+            score: it.score || it.weighted_rank || 0,
+          }));
+      return { items, meta: { elapsedMs, total: data?.total || raw.length, raw_hits: raw.length } };
+    } catch {
+      return { items: [], meta: { elapsedMs: Date.now() - started, total: 0, raw_hits: 0 } };
+    }
+  }
+
+  /** Fetch recent knowledge cards for tag-hotness based question generation. */
+  async function loadKnowledgeMeta({ limit = 30 } = {}) {
+    try {
+      const r = await fetch(`/api/v1/knowledge?limit=${limit}`);
       if (!r.ok) return [];
       const data = await r.json();
-      const items = data?.items || data?.results || data?.memories || [];
-      return items.slice(0, limit).map((it) => ({
-        title: it.title || it.filepath || it.id || '(untitled)',
-        summary: it.summary || it.content || '',
-        score: it.score || it.weighted_rank || 0,
-      }));
+      return data?.items || [];
     } catch {
       return [];
     }
   }
 
-  window.AwarenessOnboardingRecall = { pickSuggestions, loadScanMeta, runRecall };
+  /**
+   * Preferred entry point: returns content-driven questions when knowledge
+   * cards are available, falling back to the old meta-template picks.
+   */
+  async function getSuggestions() {
+    const [meta, cards] = await Promise.all([loadScanMeta(), loadKnowledgeMeta({ limit: 30 })]);
+    const fmt = (typeof window !== 'undefined' && window.AwarenessOnboardingFormat) || null;
+    if (fmt && cards && cards.length > 0) {
+      const q = fmt.buildContentQuestions(cards, meta, { limit: 3 });
+      if (q.length > 0) return q;
+    }
+    return pickSuggestions(meta);
+  }
+
+  window.AwarenessOnboardingRecall = {
+    pickSuggestions,
+    loadScanMeta,
+    loadKnowledgeMeta,
+    runRecall,
+    getSuggestions,
+  };
 })();

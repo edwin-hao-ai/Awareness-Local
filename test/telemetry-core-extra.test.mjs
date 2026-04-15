@@ -40,6 +40,40 @@ function makeTel({ enabled = true, fetchImpl, endpoint = 'https://example.test/a
   return { tel, projectDir, restore() { global.fetch = realFetch; } };
 }
 
+test('Telemetry: default-on when config has no telemetry section (fresh install)', () => {
+  // Regression for selection-B policy: if the user never touched the opt-in,
+  // telemetry should still run (they can opt out via Settings → Privacy).
+  const projectDir = tmpProject();
+  const realFetch = global.fetch;
+  try {
+    const tel = new Telemetry({
+      config: { device: { id: 'fresh-install' } }, // NO telemetry key
+      projectDir,
+      version: '0.6.1-test',
+    });
+    assert.equal(tel.enabled, true, 'fresh install must default to opted-in');
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
+test('Telemetry: explicit enabled:false disables even though default is on', () => {
+  const projectDir = tmpProject();
+  const realFetch = global.fetch;
+  try {
+    const tel = new Telemetry({
+      config: { telemetry: { enabled: false }, device: { id: 'opted-out' } },
+      projectDir,
+      version: '0.6.1-test',
+    });
+    assert.equal(tel.enabled, false, 'explicit opt-out must disable');
+    tel.track('daemon_started', { os: 'darwin' });
+    assert.equal(tel.queue.length, 0);
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
 test('Telemetry: anon installation_id fallback when deviceId missing', () => {
   const { tel, restore } = makeTel({ deviceId: '' });
   try {

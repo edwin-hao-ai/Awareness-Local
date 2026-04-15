@@ -244,3 +244,31 @@
   cursor: pointer;
 }
 .onb-status-cta:hover { filter: brightness(1.1); }
+
+/* ── Step 3 Recall result cards (F-040 readability pass) ────────────── */
+.onb-recall-stats {
+  font-size: 0.75rem;
+  color: var(--text-muted, #8a8f98);
+  background: rgba(63, 108, 255, 0.08);
+  border-left: 3px solid var(--accent, #3f6cff);
+  padding: 6px 10px;
+  border-radius: 4px;
+  margin-bottom: 10px;
+  font-feature-settings: "tnum";
+}
+.onb-result-type {
+  display: inline-block;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent, #3f6cff);
+  background: rgba(63, 108, 255, 0.1);
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-right: 6px;
+}
+.onb-result-meta {
+  font-size: 0.7rem;
+  color: var(--text-muted, #8a8f98);
+  margin-bottom: 4px;
+}

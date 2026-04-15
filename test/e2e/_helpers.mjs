@@ -28,6 +28,10 @@ export async function stubDeviceAuth(page) {
       }),
     }),
   );
+  // The daemon's /cloud/auth/poll is a long-poll — the client treats the
+  // response as terminal, so we return an api_key immediately. Tests that
+  // need to observe the pending UI should snapshot BEFORE awaiting any
+  // downstream locator (see onboarding-device-auth.spec.mjs).
   await page.route('**/api/v1/cloud/auth/poll', (route) =>
     route.fulfill({
       status: 200,

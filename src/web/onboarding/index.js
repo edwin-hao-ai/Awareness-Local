@@ -103,10 +103,14 @@
   }
 
   async function runRecall(q) {
+    // Returns { items, meta } with elapsedMs/total for the stats bar.
     return Recall.runRecall(q, 3);
   }
 
   async function getSuggestions() {
+    // Prefer content-driven questions (tag hotness + card titles); falls back
+    // to meta templates when the workspace has no knowledge cards yet.
+    if (Recall.getSuggestions) return Recall.getSuggestions();
     const meta = await Recall.loadScanMeta();
     return Recall.pickSuggestions(meta);
   }

@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.6.1] - 2026-04-15
+
+### Fixed
+- **Step 5 Cloud: header "skip, finish" button was a no-op** — the button rendered but had no click wiring. Every step using `header()` with `onSkipAll` now calls the new `wireHeader()` helper, so orphan buttons can't happen again.
+- **Step 3 Recall hit the phantom `/api/v1/recall` endpoint** — switched to the real daemon endpoint `GET /api/v1/search?q=…&limit=…`. A regression test pins the URL so this can't drift silently.
+- **CLI no longer spawns a second daemon on a new port** — when an Awareness daemon is already running on the default port, `start` now POSTs `/api/v1/workspace/switch` instead of auto-allocating 37801/37802/…. Matches the "one dashboard, switch workspaces via UI" contract.
+- **Config drift: `cloud.api_base` pointing at localhost** caused cloud-auth to generate codes on the local backend while the user's browser approved against `awareness.market` — different Redis instances. No code change; manual fix documented in CLAUDE.md.
+
+### Changed
+- **Telemetry is now default-on** (opt-out via Welcome uncheck or Settings → Privacy). Label and hint copy updated: "Enabled by default" / "默认开启". Matches VS Code / Homebrew / Raycast norms. Still honours explicit opt-out.
+- **Step 3 Recall results are now content-driven and readable**:
+  - Questions come from tag hotness + recent decision/pitfall card titles (falls back to old meta templates when cards are sparse). Zero LLM, zero network beyond the existing `/knowledge?limit=30`.
+  - Result cards pass through a new formatter that drops noisy items (raw chat logs, heavy-code-density summaries, stubs), shortens file paths to basename, strips `"""` wrappers, smart-truncates at sentence boundaries, and adds a type chip + relative timestamp ("2 天前").
+  - New "⚡ 41 ms · 找到 8 条 · 来自你 1334 条记忆" stats bar above the cards.
+
+### Added
+- `result-formatter.js` (9 pure helpers: `normalizeWhitespace`, `stripDecorative`, `smartTruncate`, `isNoisy`, `prettyTitle`, `typeBadge`, `relativeTime`, `parseTags`, `tagHotness`, `buildContentQuestions`, `formatResult`, `formatResults`) with 20 unit tests.
+- `wireHeader()` helper in `steps.js` + 11 Playwright click-path E2E (`onboarding-click-paths.spec.mjs`) covering every clickable element on every step. Explicit regression for the Step 5 orphan-skip bug.
+- 2 new `telemetry-core-extra` cases pinning default-on + explicit-off.
+- 4 CLI tests (`cli-single-daemon.test.mjs`) covering probe-and-switch vs. spawn-new daemon behavior.
+
+### Tested
+- **882 unit tests + 26 Playwright E2E** — 0 failures.
+- Production smoke still green against `https://awareness.market/api/v1`.
+
 ## [0.6.0] - 2026-04-15
 
 ### Added

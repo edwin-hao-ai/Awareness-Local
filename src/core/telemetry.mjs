@@ -2,7 +2,7 @@
  * Telemetry — opt-in anonymous usage analytics (F-040 Phase 2).
  *
  * Principles:
- *  - Opt-in only: disabled unless config.telemetry.enabled === true.
+ *  - Default-on with explicit opt-out: enabled unless config.telemetry.enabled === false.
  *  - Anonymous: installation_id = SHA-256(device_id + salt). No user identity.
  *  - No sensitive payloads: only whitelisted event_types + sanitized properties.
  *  - Fire-and-forget: batched POST, silent failure, never blocks daemon.
@@ -54,7 +54,8 @@ const ALLOWED_PROPERTY_KEYS = new Set([
 export class Telemetry {
   constructor({ config, projectDir, version = 'unknown' } = {}) {
     const telCfg = config?.telemetry || {};
-    this.enabled = telCfg.enabled === true;
+    // Default-on: only disabled when user explicitly sets enabled=false.
+    this.enabled = telCfg.enabled !== false;
     this.endpoint = telCfg.endpoint || process.env.AWARENESS_TELEMETRY_ENDPOINT || DEFAULT_ENDPOINT;
     this.version = version;
     this.projectDir = projectDir;

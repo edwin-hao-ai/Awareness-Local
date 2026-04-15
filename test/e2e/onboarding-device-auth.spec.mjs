@@ -4,6 +4,17 @@ import { freshSession, stubDeviceAuth } from './_helpers.mjs';
 test('Step 5 device-auth flow displays user_code and confirms via mocked API', async ({ page }) => {
   await freshSession(page);
   await stubDeviceAuth(page);
+  // Delay the poll by 1.5s so the renderAuthPending UI is inspectable before
+  // memory-select takes over. Overrides the generic helper's immediate
+  // response. Placed BEFORE the page.goto so it wins route resolution.
+  await page.route('**/api/v1/cloud/auth/poll', async (route) => {
+    await new Promise((r) => setTimeout(r, 1500));
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ api_key: 'testkey-abc' }),
+    });
+  });
   await page.goto('/');
   const overlay = page.locator('#awareness-onboarding');
   await expect(overlay).toBeVisible({ timeout: 8_000 });
@@ -17,11 +28,18 @@ test('Step 5 device-auth flow displays user_code and confirms via mocked API', a
   await expect(overlay.locator('.onb-modal')).toContainText(/Want to unlock more/);
   await overlay.locator('button[data-action="connect"]').click();
 
-  // user_code shown
-  await expect(overlay.locator('.onb-code-display')).toContainText('TEST-1234');
-  // Verification link uses our stubbed verification_uri (must be https — our XSS guard)
-  const href = await overlay.locator('a.onb-link').getAttribute('href');
-  expect(href).toMatch(/^https:\/\/awareness\.market\/auth\/device\?code=TEST-1234$/);
+  // Snapshot both at once — the pending UI lasts only one poll tick before
+  // memory-select takes over. Using toPass avoids flakiness under load.
+  const snapshot = await expect.poll(async () => {
+    return page.evaluate(() => {
+      const code = document.querySelector('.onb-code-display')?.textContent?.trim() || null;
+      const href = document.querySelector('a.onb-link')?.getAttribute('href') || null;
+      return { code, href };
+    });
+  }, { timeout: 5_000 }).toMatchObject({
+    code: 'TEST-1234',
+    href: expect.stringMatching(/^https:\/\/awareness\.market\/auth\/device\?code=TEST-1234$/),
+  });
 
   // Memory selection appears after poll resolves
   await expect(overlay.locator('.onb-memory-option')).toContainText('My Personal Memory', {
