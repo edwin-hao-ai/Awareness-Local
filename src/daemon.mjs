@@ -505,7 +505,7 @@ export class AwarenessLocalDaemon {
       res.writeHead(204, {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Mcp-Session-Id',
+        'Access-Control-Allow-Headers': 'Content-Type, Mcp-Session-Id, X-Awareness-Project-Dir',
       });
       res.end();
       return;
@@ -514,9 +514,30 @@ export class AwarenessLocalDaemon {
     const url = new URL(req.url, `http://localhost:${this.port}`);
 
     try {
-      // /healthz
+      // /healthz — exempt from project validation
       if (url.pathname === '/healthz') {
         return this._handleHealthz(res);
+      }
+
+      // Guard: reject requests while switchProject() is in progress
+      if (this._switching) {
+        jsonResponse(res, { error: 'project_switching', message: 'Daemon is switching projects, retry shortly' }, 503);
+        return;
+      }
+
+      // Per-request project_dir validation via X-Awareness-Project-Dir header
+      const requestedProject = req.headers['x-awareness-project-dir'];
+      if (requestedProject) {
+        const normalizedRequested = path.resolve(requestedProject);
+        const normalizedCurrent = path.resolve(this.projectDir);
+        if (normalizedRequested !== normalizedCurrent) {
+          jsonResponse(res, {
+            error: 'project_mismatch',
+            daemon_project: normalizedCurrent,
+            requested_project: normalizedRequested,
+          }, 409);
+          return;
+        }
       }
 
       // /mcp — MCP JSON-RPC over HTTP
@@ -2023,68 +2044,73 @@ ${item.description || item.title || ''}
       throw new Error(`Project directory does not exist: ${newProjectDir}`);
     }
 
-    const newAwarenessDir = path.join(newProjectDir, AWARENESS_DIR);
-    console.log(`[awareness-local] switching project: ${this.projectDir} → ${newProjectDir}`);
-
-    // 1. Stop watchers & timers
-    if (this.watcher) { this.watcher.close(); this.watcher = null; }
-    if (this._reindexTimer) { clearTimeout(this._reindexTimer); this._reindexTimer = null; }
-    if (this.cloudSync) { this.cloudSync.stop(); this.cloudSync = null; }
-
-    // 2. Close old indexer
-    if (this.indexer && this.indexer.close) {
-      this.indexer.close();
-    }
-
-    // 3. Update project paths
-    this.projectDir = newProjectDir;
-    this.guardProfile = detectGuardProfile(this.projectDir);
-    this.awarenessDir = newAwarenessDir;
-    this.pidFile = path.join(this.awarenessDir, PID_FILENAME);
-    this.logFile = path.join(this.awarenessDir, LOG_FILENAME);
-
-    // 4. Ensure directory structure
-    fs.mkdirSync(path.join(this.awarenessDir, 'memories'), { recursive: true });
-    fs.mkdirSync(path.join(this.awarenessDir, 'knowledge'), { recursive: true });
-    fs.mkdirSync(path.join(this.awarenessDir, 'tasks'), { recursive: true });
-
-    // 5. Re-init core modules
-    this.memoryStore = new MemoryStore(this.projectDir);
+    this._switching = true;
     try {
-      this.indexer = new Indexer(path.join(this.awarenessDir, 'index.db'));
-    } catch (e) {
-      console.error(`[awareness-local] SQLite indexer unavailable after switch: ${e.message}`);
-      this.indexer = createNoopIndexer();
-    }
-    this.search = await this._loadSearchEngine();
-    this.extractor = await this._loadKnowledgeExtractor();
+      const newAwarenessDir = path.join(newProjectDir, AWARENESS_DIR);
+      console.log(`[awareness-local] switching project: ${this.projectDir} → ${newProjectDir}`);
 
-    // 6. Incremental index
-    try {
-      const result = await this.indexer.incrementalIndex(this.memoryStore);
-      console.log(`[awareness-local] re-indexed: ${result.indexed} files, ${result.skipped} skipped`);
-    } catch (err) {
-      console.error('[awareness-local] re-index error:', err.message);
-    }
+      // 1. Stop watchers & timers
+      if (this.watcher) { this.watcher.close(); this.watcher = null; }
+      if (this._reindexTimer) { clearTimeout(this._reindexTimer); this._reindexTimer = null; }
+      if (this.cloudSync) { this.cloudSync.stop(); this.cloudSync = null; }
 
-    // 7. Restart cloud sync if configured
-    const config = this._loadConfig();
-    if (config.cloud?.enabled) {
+      // 2. Close old indexer
+      if (this.indexer && this.indexer.close) {
+        this.indexer.close();
+      }
+
+      // 3. Update project paths
+      this.projectDir = newProjectDir;
+      this.guardProfile = detectGuardProfile(this.projectDir);
+      this.awarenessDir = newAwarenessDir;
+      this.pidFile = path.join(this.awarenessDir, PID_FILENAME);
+      this.logFile = path.join(this.awarenessDir, LOG_FILENAME);
+
+      // 4. Ensure directory structure
+      fs.mkdirSync(path.join(this.awarenessDir, 'memories'), { recursive: true });
+      fs.mkdirSync(path.join(this.awarenessDir, 'knowledge'), { recursive: true });
+      fs.mkdirSync(path.join(this.awarenessDir, 'tasks'), { recursive: true });
+
+      // 5. Re-init core modules
+      this.memoryStore = new MemoryStore(this.projectDir);
       try {
-        const { CloudSync } = await import('./core/cloud-sync.mjs');
-        this.cloudSync = new CloudSync(config, this.indexer, this.memoryStore);
-        this.cloudSync.start().catch(() => {});
-      } catch { /* CloudSync not available */ }
+        this.indexer = new Indexer(path.join(this.awarenessDir, 'index.db'));
+      } catch (e) {
+        console.error(`[awareness-local] SQLite indexer unavailable after switch: ${e.message}`);
+        this.indexer = createNoopIndexer();
+      }
+      this.search = await this._loadSearchEngine();
+      this.extractor = await this._loadKnowledgeExtractor();
+
+      // 6. Incremental index
+      try {
+        const result = await this.indexer.incrementalIndex(this.memoryStore);
+        console.log(`[awareness-local] re-indexed: ${result.indexed} files, ${result.skipped} skipped`);
+      } catch (err) {
+        console.error('[awareness-local] re-index error:', err.message);
+      }
+
+      // 7. Restart cloud sync if configured
+      const config = this._loadConfig();
+      if (config.cloud?.enabled) {
+        try {
+          const { CloudSync } = await import('./core/cloud-sync.mjs');
+          this.cloudSync = new CloudSync(config, this.indexer, this.memoryStore);
+          this.cloudSync.start().catch(() => {});
+        } catch { /* CloudSync not available */ }
+      }
+
+      // 8. Update workspace registry
+      try {
+        const { registerWorkspace } = await import('./core/config.mjs');
+        registerWorkspace(newProjectDir, { port: this.port });
+      } catch { /* config.mjs not available */ }
+
+      console.log(`[awareness-local] switched to: ${newProjectDir} (${this.indexer.getStats().totalMemories} memories)`);
+      return { projectDir: newProjectDir, stats: this.indexer.getStats() };
+    } finally {
+      this._switching = false;
     }
-
-    // 8. Update workspace registry
-    try {
-      const { registerWorkspace } = await import('./core/config.mjs');
-      registerWorkspace(newProjectDir, { port: this.port });
-    } catch { /* config.mjs not available */ }
-
-    console.log(`[awareness-local] switched to: ${newProjectDir} (${this.indexer.getStats().totalMemories} memories)`);
-    return { projectDir: newProjectDir, stats: this.indexer.getStats() };
   }
 
   /** Load .awareness/config.json (or return defaults). */

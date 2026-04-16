@@ -1,0 +1,3139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Awareness Local</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg width='64' height='64' viewBox='0 0 512 512' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cdefs%3E%3ClinearGradient id='os' x1='30' y1='50' x2='490' y2='500' gradientUnits='userSpaceOnUse'%3E%3Cstop offset='0' stop-color='%23E0F2FE'/%3E%3Cstop offset='.35' stop-color='%237DD3FC'/%3E%3Cstop offset='.7' stop-color='%2338BDF8'/%3E%3Cstop offset='1' stop-color='%230EA5E9'/%3E%3C/linearGradient%3E%3ClinearGradient id='is' x1='120' y1='80' x2='300' y2='260' gradientUnits='userSpaceOnUse'%3E%3Cstop offset='0' stop-color='%23F0F9FF'/%3E%3Cstop offset='.4' stop-color='%23BAE6FD'/%3E%3Cstop offset='1' stop-color='%2338BDF8'/%3E%3C/linearGradient%3E%3CradialGradient id='df' cx='200' cy='168' r='20' gradientUnits='userSpaceOnUse'%3E%3Cstop offset='0' stop-color='%23F0F9FF'/%3E%3Cstop offset='.5' stop-color='%237DD3FC'/%3E%3Cstop offset='1' stop-color='%230EA5E9'/%3E%3C/radialGradient%3E%3C/defs%3E%3Ccircle cx='262' cy='275' r='218' stroke='url(%23os)' stroke-width='18' fill='none'/%3E%3Ccircle cx='198' cy='168' r='68' stroke='url(%23is)' stroke-width='15' fill='none'/%3E%3Ccircle cx='198' cy='168' r='17' fill='url(%23df)'/%3E%3C/svg%3E">
+<style>
+/* ======================================================================
+   Awareness Local — Wiki Dashboard
+   Single-file SPA, zero external dependencies
+   Aligned with cloud frontend Wiki/Insights architecture
+   ====================================================================== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg-primary: #121212;
+  --bg-secondary: #1a1a1a;
+  --bg-tertiary: #242424;
+  --bg-hover: #292929;
+  --bg-active: #1e293b;
+  --border: #2e2e2e;
+  --border-active: #3b82f6;
+  --text-primary: #ebebeb;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --accent: #3b82f6;
+  --accent-hover: #60a5fa;
+  --accent-glow: #0ea5e9;
+  --green: #22c55e;
+  --green-bg: rgba(34,197,94,0.12);
+  --yellow: #eab308;
+  --yellow-bg: rgba(234,179,8,0.12);
+  --red: #ef4444;
+  --red-bg: rgba(239,68,68,0.12);
+  --blue: #3b82f6;
+  --blue-bg: rgba(59,130,246,0.12);
+  --orange: #f97316;
+  --orange-bg: rgba(249,115,22,0.12);
+  --purple: #a855f7;
+  --purple-bg: rgba(168,85,247,0.12);
+  --cyan: #06b6d4;
+  --cyan-bg: rgba(6,182,212,0.12);
+  --sidebar-w: 280px;
+  --radius: 10px;
+  --radius-sm: 6px;
+  --transition: 150ms ease;
+}
+html { font-size: 14px; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: var(--bg-primary); color: var(--text-primary); line-height: 1.6;
+  min-height: 100vh; overflow: hidden;
+}
+
+/* ── Layout ── */
+.app { display: flex; flex-direction: column; height: 100vh; }
+.header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 20px; border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary); flex-shrink: 0; z-index: 20;
+}
+.header h1 { font-size: 1.05rem; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.header .logo-svg { width: 26px; height: 26px; flex-shrink: 0; }
+.header-right { display: flex; align-items: center; gap: 10px; }
+.daemon-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 0.78rem; color: var(--text-secondary); background: var(--bg-tertiary);
+  padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border);
+}
+.daemon-badge .dot { width: 7px; height: 7px; border-radius: 50%; }
+.daemon-badge .dot.ok { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.daemon-badge .dot.err { background: var(--red); }
+
+/* ── Top Tabs ── */
+.top-tabs {
+  display: flex; gap: 0; border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary); padding: 0 20px; flex-shrink: 0;
+}
+.top-tab {
+  background: none; border: none; border-bottom: 2px solid transparent;
+  color: var(--text-secondary); font-size: 0.85rem; padding: 10px 14px;
+  cursor: pointer; white-space: nowrap; transition: color var(--transition), border-color var(--transition);
+}
+.top-tab:hover { color: var(--text-primary); }
+.top-tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 500; }
+.top-tab .badge-count {
+  font-size: 0.7rem; background: var(--bg-tertiary); color: var(--text-muted);
+  padding: 1px 6px; border-radius: 999px; margin-left: 6px; border: 1px solid var(--border);
+}
+
+/* ── Main body ── */
+.body { flex: 1; display: flex; overflow: hidden; }
+
+/* ── Top-level tab panels ── */
+.top-panel { display: none; flex: 1; overflow: hidden; }
+.top-panel.active { display: flex; }
+
+/* ── Wiki panel (sidebar + content) ── */
+.wiki-panel { display: flex; flex: 1; overflow: hidden; }
+
+/* ── Sidebar ── */
+.sidebar {
+  width: var(--sidebar-w); min-width: var(--sidebar-w); border-right: 1px solid var(--border);
+  background: var(--bg-secondary); display: flex; flex-direction: column; overflow: hidden;
+}
+.sidebar-search {
+  padding: 10px 12px; border-bottom: 1px solid var(--border);
+}
+.sidebar-search input {
+  width: 100%; background: var(--bg-tertiary); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 7px 10px; color: var(--text-primary);
+  font-size: 0.82rem; outline: none;
+}
+.sidebar-search input::placeholder { color: var(--text-muted); }
+.sidebar-search input:focus { border-color: var(--accent); }
+.sidebar-scroll { flex: 1; overflow-y: auto; padding-bottom: 12px; }
+
+/* Sidebar groups */
+.sb-group { border-bottom: 1px solid var(--border); }
+.sb-group-header {
+  display: flex; align-items: center; padding: 8px 14px; cursor: pointer;
+  user-select: none; transition: background var(--transition);
+}
+.sb-group-header:hover { background: var(--bg-hover); }
+.sb-group-icon { width: 18px; font-size: 0.9rem; margin-right: 8px; text-align: center; flex-shrink: 0; }
+.sb-group-label { flex: 1; font-size: 0.82rem; font-weight: 500; }
+.sb-group-count {
+  font-size: 0.7rem; color: var(--text-muted); background: var(--bg-tertiary);
+  padding: 1px 6px; border-radius: 999px; margin-right: 6px;
+}
+.sb-group-chevron { font-size: 0.7rem; color: var(--text-muted); transition: transform var(--transition); }
+.sb-group.collapsed .sb-group-chevron { transform: rotate(-90deg); }
+.sb-group-items { padding: 0; }
+.sb-group.collapsed .sb-group-items { display: none; }
+
+/* Sidebar items */
+.sb-item {
+  display: flex; align-items: center; padding: 5px 14px 5px 40px;
+  cursor: pointer; font-size: 0.8rem; color: var(--text-secondary);
+  transition: background var(--transition), color var(--transition);
+  border-left: 2px solid transparent;
+}
+.sb-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.sb-item.active { background: var(--bg-active); color: var(--accent); border-left-color: var(--accent); }
+.sb-item-dot { width: 6px; height: 6px; border-radius: 50%; margin-right: 8px; flex-shrink: 0; }
+.sb-item-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-item-badge {
+  font-size: 0.68rem; color: var(--text-muted); margin-left: 6px;
+}
+
+/* Top-level sidebar entries (bold) */
+.sb-top-item {
+  display: flex; align-items: center; padding: 8px 14px; cursor: pointer;
+  font-size: 0.82rem; font-weight: 600; color: var(--text-primary);
+  transition: background var(--transition); border-left: 2px solid transparent;
+}
+.sb-top-item:hover { background: var(--bg-hover); }
+.sb-top-item.active { background: var(--bg-active); color: var(--accent); border-left-color: var(--accent); }
+.sb-top-item .sb-group-icon { margin-right: 8px; }
+.sb-top-item .sb-group-count { margin-left: auto; }
+
+/* ── Content Area ── */
+.content-area { flex: 1; overflow-y: auto; padding: 24px; }
+
+/* ── Shared UI ── */
+.badge {
+  display: inline-block; font-size: 0.72rem; padding: 2px 8px;
+  border-radius: 999px; font-weight: 500; white-space: nowrap;
+}
+.badge-cat { background: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid var(--border); }
+.badge-decision { background: var(--accent); color: #fff; }
+.badge-problem_solution { background: var(--green); color: #fff; }
+.badge-workflow { background: var(--blue); color: #fff; }
+.badge-key_point { background: var(--yellow); color: #000; }
+.badge-pitfall { background: var(--red); color: #fff; }
+.badge-insight { background: var(--orange); color: #fff; }
+.badge-personal_preference { background: var(--purple); color: #fff; }
+.badge-important_detail { background: var(--cyan); color: #fff; }
+.badge-tag { background: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid var(--border); }
+.badge-confidence { border: 1px solid var(--border); color: var(--text-secondary); }
+.badge-confidence.high { border-color: var(--green); color: var(--green); }
+.badge-confidence.mid { border-color: var(--yellow); color: var(--yellow); }
+.badge-confidence.low { border-color: var(--red); color: var(--red); }
+.badge-growth { font-size: 0.72rem; padding: 2px 8px; border-radius: 999px; }
+.badge-evergreen { background: rgba(34,197,94,0.15); color: #4ade80; border: 1px solid rgba(34,197,94,0.3); }
+.badge-budding { background: rgba(234,179,8,0.12); color: #fbbf24; border: 1px solid rgba(234,179,8,0.25); }
+.badge-seedling { background: rgba(148,163,184,0.1); color: #94a3b8; border: 1px solid rgba(148,163,184,0.2); }
+
+.btn {
+  background: var(--accent); color: #fff; border: none; border-radius: var(--radius-sm);
+  padding: 8px 16px; font-size: 0.82rem; cursor: pointer; font-weight: 500;
+  transition: background var(--transition);
+}
+.btn:hover { background: var(--accent-hover); }
+.btn-ghost {
+  background: transparent; color: var(--text-secondary); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 6px 12px; font-size: 0.82rem; cursor: pointer;
+}
+.btn-ghost:hover { background: var(--bg-hover); color: var(--text-primary); }
+.btn-sm { padding: 4px 10px; font-size: 0.76rem; }
+
+.card-box {
+  background: var(--bg-secondary); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px; transition: border-color var(--transition);
+}
+.card-box:hover { border-color: var(--border-active); }
+.card-box-clickable { cursor: pointer; }
+
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.grid-3 { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+
+.section-title { font-size: 0.85rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+.section-gap { margin-bottom: 28px; }
+
+.empty-state { text-align: center; padding: 48px 20px; color: var(--text-muted); }
+.empty-state .icon { font-size: 2rem; margin-bottom: 10px; opacity: 0.5; }
+.loading { text-align: center; padding: 40px; color: var(--text-muted); }
+.spinner {
+  display: inline-block; width: 22px; height: 22px; border: 2px solid var(--border);
+  border-top-color: var(--accent); border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Stats header (overview) ── */
+.stats-row { display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
+.stat-card {
+  flex: 1; min-width: 120px; background: var(--bg-secondary); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px 16px; text-align: center;
+}
+.stat-card .num { font-size: 1.6rem; font-weight: 700; color: var(--text-primary); }
+.stat-card .label { font-size: 0.78rem; color: var(--text-muted); margin-top: 2px; }
+
+/* ── Card detail view ── */
+.card-detail { display: flex; gap: 24px; }
+.card-detail-main { flex: 1; min-width: 0; }
+.card-detail-sidebar { width: 260px; flex-shrink: 0; }
+.card-detail-title { font-size: 1.3rem; font-weight: 700; margin-bottom: 8px; }
+.card-detail-body { font-size: 0.9rem; line-height: 1.7; color: var(--text-secondary); word-break: break-word; }
+.card-detail-body pre { margin: 8px 0; }
+.card-detail-body code { font-family: "SF Mono", Monaco, "Cascadia Code", monospace; }
+.card-detail-body a { color: var(--accent); }
+.card-detail-body h1,.card-detail-body h2,.card-detail-body h3 { color: var(--text-primary); }
+.meta-table { width: 100%; font-size: 0.82rem; }
+.meta-table td { padding: 6px 0; vertical-align: top; }
+.meta-table td:first-child { color: var(--text-muted); width: 100px; }
+
+/* ── Skill card ── */
+.skill-card { position: relative; }
+.skill-card-name { font-weight: 600; font-size: 0.92rem; margin-bottom: 4px; }
+.skill-card-summary { font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 10px; }
+.skill-decay-bar { height: 4px; background: var(--bg-tertiary); border-radius: 2px; overflow: hidden; margin-bottom: 6px; }
+.skill-decay-fill { height: 100%; border-radius: 2px; transition: width 0.3s; }
+.skill-meta { display: flex; gap: 8px; font-size: 0.75rem; color: var(--text-muted); flex-wrap: wrap; }
+.skill-pin { position: absolute; top: 10px; right: 10px; cursor: pointer; font-size: 0.9rem; opacity: 0.5; }
+.skill-pin:hover { opacity: 1; }
+.skill-pin.pinned { opacity: 1; color: var(--yellow); }
+
+/* ── Timeline ── */
+.tl-day { margin-bottom: 20px; }
+.tl-day-header { font-size: 0.82rem; font-weight: 600; color: var(--text-muted); margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.tl-event { display: flex; gap: 10px; padding: 6px 0; font-size: 0.82rem; }
+.tl-event-time { color: var(--text-muted); width: 60px; flex-shrink: 0; }
+.tl-event-content { flex: 1; color: var(--text-secondary); }
+.tl-event-type { font-size: 0.72rem; }
+
+/* ── Search modal ── */
+.search-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; align-items: flex-start; justify-content: center; padding-top: 12vh; }
+.search-overlay.visible { display: flex; }
+.search-modal {
+  background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius);
+  width: 560px; max-width: 90vw; max-height: 70vh; display: flex; flex-direction: column; overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+.search-modal-input {
+  width: 100%; background: transparent; border: none; border-bottom: 1px solid var(--border);
+  padding: 14px 16px; color: var(--text-primary); font-size: 0.95rem; outline: none;
+}
+.search-modal-input::placeholder { color: var(--text-muted); }
+.search-results { flex: 1; overflow-y: auto; }
+.search-result {
+  display: flex; align-items: center; gap: 10px; padding: 10px 16px;
+  cursor: pointer; transition: background var(--transition);
+}
+.search-result:hover, .search-result.focused { background: var(--bg-hover); }
+.search-result-icon { font-size: 0.9rem; width: 24px; text-align: center; flex-shrink: 0; }
+.search-result-info { flex: 1; min-width: 0; }
+.search-result-title { font-size: 0.85rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-result-snippet { font-size: 0.76rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-result-score { font-size: 0.7rem; color: var(--text-muted); }
+.search-hint { padding: 12px 16px; font-size: 0.78rem; color: var(--text-muted); text-align: center; }
+
+/* ── Sync / Settings panels (non-wiki) ── */
+.simple-panel { flex: 1; overflow-y: auto; padding: 24px; max-width: 800px; margin: 0 auto; }
+.sync-status-box {
+  background: var(--bg-secondary); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 20px; margin-bottom: 20px;
+  display: flex; align-items: center; gap: 16px;
+}
+.sync-icon { width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 20px; }
+.sync-icon.connected { background: var(--green-bg); }
+.sync-icon.disconnected { background: var(--bg-tertiary); }
+.sync-info h3 { font-size: 0.95rem; font-weight: 600; margin-bottom: 3px; }
+.sync-info p { font-size: 0.82rem; color: var(--text-secondary); }
+.connect-instructions { display: none; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-top: 16px; }
+.connect-instructions.visible { display: block; }
+.sync-history { margin-top: 20px; }
+.sync-history h4 { font-size: 0.88rem; font-weight: 600; margin-bottom: 10px; color: var(--text-secondary); }
+.sync-history-item { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 0.82rem; }
+.sync-history-item:last-child { border-bottom: none; }
+
+.settings-section { margin-bottom: 24px; }
+.settings-section h3 { font-size: 0.92rem; font-weight: 600; margin-bottom: 12px; }
+.setting-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 0; border-bottom: 1px solid var(--border);
+}
+.setting-row:last-child { border-bottom: none; }
+.setting-label { font-size: 0.85rem; }
+.setting-label small { display: block; color: var(--text-muted); font-size: 0.76rem; margin-top: 2px; }
+.setting-value { font-size: 0.82rem; color: var(--text-secondary); font-family: "SF Mono", Monaco, monospace; }
+.toggle { width: 40px; height: 22px; border-radius: 11px; background: var(--bg-tertiary); border: 1px solid var(--border); position: relative; cursor: pointer; transition: background var(--transition); }
+.toggle.on { background: var(--accent); border-color: var(--accent); }
+.toggle .knob { width: 16px; height: 16px; border-radius: 50%; background: #fff; position: absolute; top: 2px; left: 2px; transition: left var(--transition); }
+.toggle.on .knob { left: 20px; }
+
+/* Breadcrumb */
+.breadcrumb { display: flex; align-items: center; gap: 6px; margin-bottom: 16px; font-size: 0.82rem; }
+.breadcrumb a { color: var(--accent); cursor: pointer; text-decoration: none; }
+.breadcrumb a:hover { text-decoration: underline; }
+.breadcrumb .sep { color: var(--text-muted); }
+
+/* ── Stats bar (footer) ── */
+.stats-bar {
+  display: flex; align-items: center; gap: 14px; padding: 8px 20px;
+  background: var(--bg-secondary); border-top: 1px solid var(--border);
+  font-size: 0.76rem; color: var(--text-muted); flex-shrink: 0;
+}
+.stats-bar .stat { display: flex; align-items: center; gap: 4px; }
+.stats-bar .sep { color: var(--border); }
+
+/* ── Responsive ── */
+@media (max-width: 768px) {
+  .sidebar { display: none; }
+  .card-detail { flex-direction: column; }
+  .card-detail-sidebar { width: 100%; }
+  .stats-row { flex-direction: column; }
+  .grid-2, .grid-3 { grid-template-columns: 1fr; }
+}
+
+/* Priority dots */
+.priority-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.priority-dot.high { background: var(--red); box-shadow: 0 0 4px var(--red); }
+.priority-dot.medium { background: var(--yellow); }
+.priority-dot.low { background: var(--green); }
+
+/* Risk level */
+.risk-level { font-size: 0.72rem; padding: 2px 8px; border-radius: 999px; font-weight: 500; }
+.risk-level.high { background: var(--red-bg); color: var(--red); }
+.risk-level.medium { background: var(--yellow-bg); color: var(--yellow); }
+.risk-level.low { background: var(--green-bg); color: var(--green); }
+
+/* Task status select */
+.task-status-select {
+  background: var(--bg-tertiary); color: var(--text-primary);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 4px 8px; font-size: 0.78rem; cursor: pointer; outline: none;
+}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <!-- Header -->
+  <header class="header">
+    <h1>
+      <svg class="logo-svg" width="26" height="26" viewBox="0 0 512 512" fill="none"><defs><linearGradient id="os" x1="30" y1="50" x2="490" y2="500" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#E0F2FE"/><stop offset=".35" stop-color="#7DD3FC"/><stop offset=".7" stop-color="#38BDF8"/><stop offset="1" stop-color="#0EA5E9"/></linearGradient><linearGradient id="is" x1="120" y1="80" x2="300" y2="260" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#F0F9FF"/><stop offset=".4" stop-color="#BAE6FD"/><stop offset="1" stop-color="#38BDF8"/></linearGradient><radialGradient id="df" cx="200" cy="168" r="20" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#F0F9FF"/><stop offset=".5" stop-color="#7DD3FC"/><stop offset="1" stop-color="#0EA5E9"/></radialGradient></defs><circle cx="262" cy="275" r="218" stroke="url(#os)" stroke-width="16" fill="none"/><circle cx="198" cy="168" r="68" stroke="url(#is)" stroke-width="13" fill="none"/><circle cx="198" cy="168" r="15" fill="url(#df)"/></svg>
+      <span style="font-size:0.88rem">Awareness</span>
+    </h1>
+    <!-- Workspace switcher button (prominent, left-aligned next to logo) -->
+    <button id="ws-btn" onclick="toggleWorkspacePicker()" style="display:flex;align-items:center;gap:7px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 14px;cursor:pointer;color:var(--text-primary);font-size:0.9rem;margin-left:12px;transition:border-color 150ms,background 150ms" onmouseover="this.style.borderColor='var(--accent)';this.style.background='var(--bg-hover)'" onmouseout="this.style.borderColor='var(--border)';this.style.background='var(--bg-tertiary)'">
+      <span style="font-size:1rem">&#128193;</span>
+      <span id="project-name-header" style="font-weight:600;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Loading...</span>
+      <span style="font-size:0.65rem;color:var(--text-muted);margin-left:2px">&#9660;</span>
+    </button>
+    <!-- Workspace picker dropdown (positioned dynamically by JS) -->
+    <div id="ws-picker" style="display:none;position:fixed;z-index:50;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 8px 24px rgba(0,0,0,0.4);min-width:340px;max-width:440px;max-height:420px;overflow-y:auto"></div>
+    <div class="header-right">
+      <button class="btn-ghost btn-sm" onclick="openSearch()" title="Search (Cmd+K)" style="display:flex;align-items:center;gap:4px;">
+        <span style="font-size:0.9rem">&#128269;</span> <span style="font-size:0.72rem;color:var(--text-muted)">&#8984;K</span>
+      </button>
+      <button class="btn-ghost btn-sm" id="lang-toggle" onclick="toggleLangMenu()" title="Language" style="display:flex;align-items:center;gap:4px;position:relative">
+        <span style="font-size:0.9rem">&#127760;</span>
+        <span id="lang-label" style="font-size:0.72rem">EN</span>
+        <span style="font-size:0.55rem;color:var(--text-muted)">&#9660;</span>
+      </button>
+      <div class="daemon-badge">
+        <span class="dot" id="daemon-dot"></span>
+        <span id="daemon-label">Checking...</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Top Tabs -->
+  <nav class="top-tabs" id="top-tabs">
+    <button class="top-tab active" data-tab="wiki">Insights</button>
+    <button class="top-tab" data-tab="data">All Memories</button>
+    <button class="top-tab" data-tab="sync">Sync</button>
+    <button class="top-tab" data-tab="settings">Settings</button>
+  </nav>
+
+  <!-- Body -->
+  <div class="body">
+    <!-- Wiki Panel (Insights) -->
+    <div class="top-panel active" id="panel-wiki">
+      <div class="wiki-panel">
+        <aside class="sidebar" id="sidebar">
+          <div class="sidebar-search">
+            <input type="text" id="sidebar-filter" placeholder="Filter..." oninput="filterSidebar(this.value)" />
+          </div>
+          <div class="sidebar-scroll" id="sidebar-scroll"></div>
+        </aside>
+        <main class="content-area" id="content-area">
+          <div class="loading"><div class="spinner"></div><p>Loading insights...</p></div>
+        </main>
+      </div>
+    </div>
+
+    <!-- Data Panel (All Memories) -->
+    <div class="top-panel" id="panel-data">
+      <div class="simple-panel" id="data-panel-inner" style="max-width:960px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <h2 id="memories-h2" style="font-size:1.05rem;font-weight:600">All Memories</h2>
+          <div id="mem-stats" style="font-size:0.78rem;color:var(--text-muted)"></div>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:16px">
+          <input type="text" id="memory-search" placeholder="Search all memories... (keyword or semantic)" style="flex:1;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--radius-sm);padding:9px 14px;color:var(--text-primary);font-size:0.85rem;outline:none;transition:border-color 150ms" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'" />
+          <button class="btn" id="memories-search-btn" onclick="searchMemories()" style="padding:9px 20px">Search</button>
+        </div>
+        <div id="memory-list"><div class="loading"><div class="spinner"></div></div></div>
+        <div id="mem-load-more" style="display:none;text-align:center;padding:16px">
+          <button class="btn-ghost" onclick="loadMoreMemories()">Load More</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sync Panel -->
+    <div class="top-panel" id="panel-sync">
+      <div class="simple-panel" id="sync-panel-inner"></div>
+    </div>
+
+    <!-- Settings Panel -->
+    <div class="top-panel" id="panel-settings">
+      <div class="simple-panel" id="settings-panel-inner"></div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <footer class="stats-bar">
+    <span class="stat" id="stat-memories">-- memories</span>
+    <span class="sep">&middot;</span>
+    <span class="stat" id="stat-cards">-- cards</span>
+    <span class="sep">&middot;</span>
+    <span class="stat" id="stat-skills">-- skills</span>
+    <span class="sep">&middot;</span>
+    <span class="stat" id="stat-tasks">-- tasks</span>
+    <span class="sep">&middot;</span>
+    <span class="stat" id="stat-cloud">Cloud: checking</span>
+  </footer>
+</div>
+
+<!-- Search Modal Overlay -->
+<div class="search-overlay" id="search-overlay" onclick="if(event.target===this)closeSearch()">
+  <div class="search-modal">
+    <input class="search-modal-input" id="search-modal-input" placeholder="Search knowledge, memories, tasks..." autocomplete="off" />
+    <div class="search-results" id="search-results">
+      <div class="search-hint">Type to search... (hybrid semantic + keyword)</div>
+    </div>
+  </div>
+</div>
+
+<script>
+
+/* ======================================================================
+   Awareness Local — Wiki Dashboard Controller
+   ====================================================================== */
+// @ts-nocheck
+
+
+const API = '/api/v1';
+
+// ── State ──
+let currentTopTab = 'wiki';
+let selectedItem = { type: 'overview' };
+let sidebarData = { topics: [], skills: [], tasks: [], risks: [], knowledgeCards: [], timeline: [], perceptions: [], perceptionCounts: {} };
+let statsData = {};
+let searchFocusIdx = -1;
+let searchDebounce = null;
+let memoriesLoaded = false;
+// Track which sidebar groups are collapsed (persisted across re-renders)
+const sidebarCollapsed = { eng: true, pers: true, risks: true, timeline: true };
+
+// Category metadata
+const ENGINEERING_CATS = ['decision','problem_solution','workflow','key_point','pitfall','insight'];
+const PERSONAL_CATS = ['personal_preference','important_detail','plan_intention','activity_preference','health_info','career_info','custom_misc'];
+const CAT_ICONS = { decision:'&#9878;', problem_solution:'&#9989;', workflow:'&#9881;', key_point:'&#128161;', pitfall:'&#9888;', insight:'&#128142;', personal_preference:'&#9829;', important_detail:'&#128203;', plan_intention:'&#127919;', risk:'&#9888;' };
+const CAT_COLORS = { decision:'#3b82f6', problem_solution:'#22c55e', workflow:'#6366f1', key_point:'#eab308', pitfall:'#ef4444', insight:'#f97316', personal_preference:'#a855f7', important_detail:'#06b6d4', plan_intention:'#ec4899', risk:'#ef4444' };
+const GROWTH_EMOJI = { evergreen: '&#127795;', budding: '&#127807;', seedling: '&#127793;' };
+
+// ── i18n: lightweight inline dictionary (zero dependencies) ──
+const LOCALES = {
+  en: {
+    // Header
+    'header.search': 'Search',
+    'header.running': 'Running',
+    'header.offline': 'Offline',
+    'header.checking': 'Checking...',
+    // Tabs
+    'tab.insights': 'Insights',
+    'tab.memories': 'All Memories',
+    'tab.sync': 'Sync',
+    'tab.settings': 'Settings',
+    // Sidebar
+    'sidebar.overview': 'Overview',
+    'sidebar.awareness': 'Awareness',
+    'sidebar.topics': 'Topics',
+    'sidebar.eng_cards': 'Engineering Cards',
+    'sidebar.pers_cards': 'Personal Cards',
+    'sidebar.skills': 'Skills',
+    'sidebar.tasks': 'Tasks',
+    'sidebar.risks': 'Risks',
+    'sidebar.timeline': 'Timeline',
+    'sidebar.filter': 'Filter...',
+    // Stats
+    'stats.cards': 'Knowledge Cards',
+    'stats.topics': 'Topics',
+    'stats.evergreens': 'Evergreens',
+    'stats.active_skills': 'Active Skills',
+    'stats.open_tasks': 'Open Tasks',
+    'stats.memories_count': '{n} memories',
+    'stats.cards_count': '{n} cards',
+    'stats.skills_count': '{n} skills',
+    'stats.tasks_count': '{n} tasks',
+    // Overview sections
+    'overview.topics_section': 'Topics',
+    'overview.recent_cards': 'Recent Knowledge Cards',
+    'overview.pending_tasks': 'Pending Tasks',
+    'overview.active_risks': 'Active Risks',
+    'overview.active_skills': 'Active Skills',
+    'overview.view_all': 'View All →',
+    'overview.no_tasks': 'No open tasks',
+    'overview.no_risks': 'No active risks',
+    // Attention bar
+    'attention.title': 'Your memory is paying attention',
+    'attention.see_all': 'See all →',
+    'attention.guards': '{n} guard',
+    'attention.guards_plural': '{n} guards',
+    'attention.patterns': '{n} pattern',
+    'attention.patterns_plural': '{n} patterns',
+    'attention.resonance': '{n} resonance',
+    'attention.stale': '{n} stale',
+    'attention.conflicts': '{n} conflict',
+    'attention.conflicts_plural': '{n} conflicts',
+    'attention.related': '{n} related',
+    // Perception Center
+    'perception.title': 'Awareness Signals',
+    'perception.subtitle': 'Signals your memory thinks you should know about. They decay over time and auto-dismiss when resolved.',
+    'perception.cleanup': 'Cleanup',
+    'perception.filter.active': 'Active',
+    'perception.filter.snoozed': 'Snoozed',
+    'perception.filter.auto_resolved': 'Auto-Resolved',
+    'perception.filter.dismissed': 'Dismissed',
+    'perception.filter.all': 'All',
+    'perception.empty': 'No {filter} signals.',
+    'perception.empty_hint': 'Perceptions are generated automatically when you record memories.',
+    'perception.state.active': 'active',
+    'perception.state.hidden': 'hidden (exposure cap)',
+    'perception.state.snoozed': 'snoozed',
+    'perception.state.auto_resolved': '🤖 auto-resolved',
+    'perception.state.dismissed': 'dismissed',
+    'perception.shown': 'Shown: {n}/3 times',
+    'perception.weight': 'Weight: {pct}%',
+    'perception.first': 'First: {when}',
+    'perception.last': 'Last: {when}',
+    'perception.llm_resolved': '🤖 LLM auto-resolved',
+    'perception.triggered_by': 'Triggered by memory:',
+    'perception.snoozed_until': 'Snoozed until: {when}',
+    'perception.action.snooze': '💤 Snooze 7d',
+    'perception.action.dismiss': '🪦 Dismiss',
+    'perception.action.restore': '↺ Restore',
+    'perception.action.jump': '→ Jump to card',
+    'perception.type.guard': 'Guards',
+    'perception.type.contradiction': 'Contradictions',
+    'perception.type.pattern': 'Patterns',
+    'perception.type.resonance': 'Resonance',
+    'perception.type.staleness': 'Staleness',
+    'perception.type.related_decision': 'Related Decisions',
+    'perception.type.unknown': 'Other',
+    // All Memories
+    'memories.title': 'All Memories',
+    'memories.search_ph': 'Search all memories... (keyword or semantic)',
+    'memories.search_btn': 'Search',
+    'memories.load_more': 'Load More',
+    'memories.showing': 'Showing {shown} of {total}',
+    'memories.none': 'No memories found.',
+    // Sync
+    'sync.title': 'Cloud Sync',
+    'sync.connected': 'Connected',
+    'sync.not_connected': 'Not Connected',
+    'sync.disconnect': 'Disconnect',
+    'sync.connect': 'Connect to Cloud',
+    'sync.memory_label': 'Memory:',
+    'sync.last_sync': 'Last sync: {when}',
+    'sync.connect_description': 'Connect to cloud for backup, cross-device sync, and web dashboard access.',
+    'sync.cap.memories': 'Memories',
+    'sync.cap.cards': 'Knowledge Cards',
+    'sync.cap.tasks': 'Tasks',
+    'sync.cap.risks': 'Risks',
+    'sync.cap.skills': 'Skills',
+    'sync.cap.topics': 'Topics (MOC)',
+    'sync.cap.push': 'Push',
+    'sync.cap.push_pull': 'Push & Pull',
+    'sync.cap.pull': 'Pull from Cloud',
+    'sync.cap.via_card': 'Via Card Sync',
+    'sync.recent_push_mem': '↑ Recently Pushed Memories',
+    'sync.recent_push_cards': '↑ Recently Pushed Knowledge Cards',
+    'sync.recent_pull': '↓ Recently Pulled from Cloud',
+    'sync.recent_empty': 'No items synced yet. Sync happens automatically when you record new memories.',
+    'sync.history': 'Sync Event Log ({n} events)',
+    // Settings
+    'settings.title': 'Settings',
+    'settings.section.embedding': '🧠 Embedding',
+    'settings.section.git': '🛠 Git Sync',
+    'settings.section.cloud': '☁ Cloud Sync',
+    'settings.section.daemon': '⚙ Daemon',
+    'settings.section.workspaces': '📁 Workspaces',
+    'settings.section.language': '🌐 Language',
+    'settings.embedding_multi': 'Multilingual Mode',
+    'settings.embedding_desc': 'Switch between English-optimized and multilingual embedding model. Multilingual supports Chinese, Japanese, Korean, and more.',
+    'settings.git_auto_commit': 'Auto Commit',
+    'settings.git_auto_desc': 'Automatically commit .awareness/ changes to git after each session.',
+    'settings.model': 'Model',
+    'settings.branch': 'Branch',
+    'settings.status': 'Status',
+    'settings.memory_id': 'Memory ID',
+    'settings.auto_sync': 'Auto Sync',
+    'settings.api_base': 'API Base',
+    'settings.port': 'Port',
+    'settings.log_level': 'Log Level',
+    'settings.device_id': 'Device ID',
+    'settings.device_name': 'Device Name',
+    'settings.ws_no': 'No workspaces registered.',
+    'settings.ws_no_user': 'No user workspaces found.',
+    'settings.interface_lang': 'Interface Language',
+    'settings.interface_lang_desc': 'Changes UI text language (takes effect immediately).',
+    'settings.on': 'On',
+    'settings.off': 'Off',
+    'settings.yes': 'Yes',
+    'settings.no': 'No',
+    'settings.dev_mode': '⚠ DEV MODE (pointing to local server)',
+    // Common
+    'common.loading': 'Loading...',
+    'common.untitled': 'Untitled',
+    'common.none': 'None',
+    'common.just_now': 'just now',
+    'common.never': 'never',
+    'common.current': 'current',
+    'common.refresh': 'Refresh',
+    'common.back': 'Back',
+    'common.category': 'Category',
+    'common.created': 'Created',
+    'common.updated': 'Updated',
+    'common.confidence': 'Confidence',
+    'common.growth': 'Growth',
+    'common.tags': 'Tags',
+    'common.type': 'Type',
+    'common.source': 'Source',
+    'common.metadata': 'Metadata',
+    'common.related_cards': 'Related Cards',
+    'common.evolution': 'Evolution Chain',
+  },
+  zh: {
+    'header.search': '搜索',
+    'header.running': '运行中',
+    'header.offline': '离线',
+    'header.checking': '检查中...',
+    'tab.insights': '洞察',
+    'tab.memories': '所有记忆',
+    'tab.sync': '同步',
+    'tab.settings': '设置',
+    'sidebar.overview': '概览',
+    'sidebar.awareness': '感知',
+    'sidebar.topics': '主题',
+    'sidebar.eng_cards': '工程卡片',
+    'sidebar.pers_cards': '个人卡片',
+    'sidebar.skills': '技能',
+    'sidebar.tasks': '任务',
+    'sidebar.risks': '风险',
+    'sidebar.timeline': '时间线',
+    'sidebar.filter': '筛选...',
+    'stats.cards': '知识卡片',
+    'stats.topics': '主题',
+    'stats.evergreens': '常青卡',
+    'stats.active_skills': '活跃技能',
+    'stats.open_tasks': '待办任务',
+    'stats.memories_count': '{n} 条记忆',
+    'stats.cards_count': '{n} 卡片',
+    'stats.skills_count': '{n} 技能',
+    'stats.tasks_count': '{n} 任务',
+    'overview.topics_section': '主题',
+    'overview.recent_cards': '最近的知识卡片',
+    'overview.pending_tasks': '待办任务',
+    'overview.active_risks': '活跃风险',
+    'overview.active_skills': '活跃技能',
+    'overview.view_all': '查看全部 →',
+    'overview.no_tasks': '暂无待办任务',
+    'overview.no_risks': '暂无活跃风险',
+    'attention.title': '你的记忆正在关注',
+    'attention.see_all': '查看全部 →',
+    'attention.guards': '{n} 个警戒',
+    'attention.guards_plural': '{n} 个警戒',
+    'attention.patterns': '{n} 个模式',
+    'attention.patterns_plural': '{n} 个模式',
+    'attention.resonance': '{n} 个共鸣',
+    'attention.stale': '{n} 条陈旧',
+    'attention.conflicts': '{n} 个冲突',
+    'attention.conflicts_plural': '{n} 个冲突',
+    'attention.related': '{n} 个关联',
+    'perception.title': '感知信号',
+    'perception.subtitle': '你的记忆认为你应该知道的信号。它们会随时间衰减，解决后自动消失。',
+    'perception.cleanup': '清理',
+    'perception.filter.active': '活跃',
+    'perception.filter.snoozed': '已暂停',
+    'perception.filter.auto_resolved': '自动解决',
+    'perception.filter.dismissed': '已忽略',
+    'perception.filter.all': '全部',
+    'perception.empty': '暂无 {filter} 信号。',
+    'perception.empty_hint': '记录新记忆时会自动生成感知信号。',
+    'perception.state.active': '活跃',
+    'perception.state.hidden': '已隐藏（曝光上限）',
+    'perception.state.snoozed': '已暂停',
+    'perception.state.auto_resolved': '🤖 自动解决',
+    'perception.state.dismissed': '已忽略',
+    'perception.shown': '已展示：{n}/3 次',
+    'perception.weight': '权重：{pct}%',
+    'perception.first': '首次：{when}',
+    'perception.last': '最近：{when}',
+    'perception.llm_resolved': '🤖 LLM 自动解决',
+    'perception.triggered_by': '触发记忆：',
+    'perception.snoozed_until': '暂停至：{when}',
+    'perception.action.snooze': '💤 暂停 7 天',
+    'perception.action.dismiss': '🪦 忽略',
+    'perception.action.restore': '↺ 恢复',
+    'perception.action.jump': '→ 跳转到卡片',
+    'perception.type.guard': '警戒',
+    'perception.type.contradiction': '冲突',
+    'perception.type.pattern': '模式',
+    'perception.type.resonance': '共鸣',
+    'perception.type.staleness': '陈旧',
+    'perception.type.related_decision': '相关决策',
+    'perception.type.unknown': '其他',
+    'memories.title': '所有记忆',
+    'memories.search_ph': '搜索所有记忆...（关键词或语义）',
+    'memories.search_btn': '搜索',
+    'memories.load_more': '加载更多',
+    'memories.showing': '显示 {shown} / 共 {total} 条',
+    'memories.none': '未找到记忆。',
+    'sync.title': '云同步',
+    'sync.connected': '已连接',
+    'sync.not_connected': '未连接',
+    'sync.disconnect': '断开连接',
+    'sync.connect': '连接到云端',
+    'sync.memory_label': '记忆库：',
+    'sync.last_sync': '上次同步：{when}',
+    'sync.connect_description': '连接云端以获得备份、跨设备同步和 Web 仪表盘。',
+    'sync.cap.memories': '记忆',
+    'sync.cap.cards': '知识卡片',
+    'sync.cap.tasks': '任务',
+    'sync.cap.risks': '风险',
+    'sync.cap.skills': '技能',
+    'sync.cap.topics': '主题（MOC）',
+    'sync.cap.push': '推送',
+    'sync.cap.push_pull': '双向同步',
+    'sync.cap.pull': '从云端拉取',
+    'sync.cap.via_card': '随卡片同步',
+    'sync.recent_push_mem': '↑ 最近推送的记忆',
+    'sync.recent_push_cards': '↑ 最近推送的知识卡片',
+    'sync.recent_pull': '↓ 最近从云端拉取',
+    'sync.recent_empty': '尚未同步任何内容。记录新记忆时会自动同步。',
+    'sync.history': '同步事件日志（{n} 条）',
+    'settings.title': '设置',
+    'settings.section.embedding': '🧠 向量模型',
+    'settings.section.git': '🛠 Git 同步',
+    'settings.section.cloud': '☁ 云同步',
+    'settings.section.daemon': '⚙ 守护进程',
+    'settings.section.workspaces': '📁 工作区',
+    'settings.section.language': '🌐 语言',
+    'settings.embedding_multi': '多语言模式',
+    'settings.embedding_desc': '在英文优化和多语言嵌入模型之间切换。多语言模式支持中文、日文、韩文等。',
+    'settings.git_auto_commit': '自动提交',
+    'settings.git_auto_desc': '每次会话后自动提交 .awareness/ 变更到 git。',
+    'settings.model': '模型',
+    'settings.branch': '分支',
+    'settings.status': '状态',
+    'settings.memory_id': '记忆 ID',
+    'settings.auto_sync': '自动同步',
+    'settings.api_base': 'API 地址',
+    'settings.port': '端口',
+    'settings.log_level': '日志级别',
+    'settings.device_id': '设备 ID',
+    'settings.device_name': '设备名称',
+    'settings.ws_no': '尚未注册工作区。',
+    'settings.ws_no_user': '未找到用户工作区。',
+    'settings.interface_lang': '界面语言',
+    'settings.interface_lang_desc': '修改界面文字语言（立即生效）。',
+    'settings.on': '开启',
+    'settings.off': '关闭',
+    'settings.yes': '是',
+    'settings.no': '否',
+    'settings.dev_mode': '⚠ 开发模式（指向本地服务器）',
+    'common.loading': '加载中...',
+    'common.untitled': '未命名',
+    'common.none': '无',
+    'common.just_now': '刚刚',
+    'common.never': '从未',
+    'common.current': '当前',
+    'common.refresh': '刷新',
+    'common.back': '返回',
+    'common.category': '分类',
+    'common.created': '创建于',
+    'common.updated': '更新于',
+    'common.confidence': '置信度',
+    'common.growth': '成长阶段',
+    'common.tags': '标签',
+    'common.type': '类型',
+    'common.source': '来源',
+    'common.metadata': '元数据',
+    'common.related_cards': '相关卡片',
+    'common.evolution': '演化链',
+  },
+};
+
+let currentLocale = (() => {
+  try {
+    const saved = localStorage.getItem('awareness_locale');
+    if (saved && LOCALES[saved]) return saved;
+  } catch {}
+  // Detect browser language
+  const nav = (navigator.language || navigator.userLanguage || 'en').toLowerCase();
+  if (nav.startsWith('zh')) return 'zh';
+  return 'en';
+})();
+
+/** Translate a key with variable interpolation. Falls back to English then to key itself. */
+function t(key, vars) {
+  let str = LOCALES[currentLocale]?.[key] ?? LOCALES.en[key] ?? key;
+  if (vars) {
+    for (const [k, v] of Object.entries(vars)) {
+      str = str.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v));
+    }
+  }
+  return str;
+}
+
+function setLocale(loc) {
+  if (!LOCALES[loc]) return;
+  currentLocale = loc;
+  try { localStorage.setItem('awareness_locale', loc); } catch {}
+  // Re-apply static labels + re-render current view
+  applyStaticI18n();
+  if (typeof updateLangLabel === 'function') updateLangLabel();
+  renderSidebar(document.getElementById('sidebar-filter')?.value || '');
+  navigate(selectedItem);
+  if (currentTopTab === 'sync') renderSyncPanel();
+  if (currentTopTab === 'settings') renderSettingsPanel();
+  if (currentTopTab === 'data') loadMemories();
+}
+
+/** Apply translations to static DOM elements (tabs, placeholders, labels). */
+function applyStaticI18n() {
+  // Top tabs
+  document.querySelectorAll('.top-tab').forEach((btn) => {
+    const key = btn.dataset.tab;
+    const map = { wiki: 'tab.insights', data: 'tab.memories', sync: 'tab.sync', settings: 'tab.settings' };
+    if (map[key]) btn.textContent = t(map[key]);
+  });
+  // Sidebar filter placeholder
+  const sbf = document.getElementById('sidebar-filter');
+  if (sbf) sbf.placeholder = t('sidebar.filter');
+  // Memory search placeholder + button
+  const ms = document.getElementById('memory-search');
+  if (ms) ms.placeholder = t('memories.search_ph');
+  const msBtn = document.getElementById('memories-search-btn');
+  if (msBtn) msBtn.textContent = t('memories.search_btn');
+  const memH2 = document.getElementById('memories-h2');
+  if (memH2) memH2.textContent = t('memories.title');
+  // Load more button
+  const lm = document.querySelector('#mem-load-more button');
+  if (lm) lm.textContent = t('memories.load_more');
+}
+
+// ── Helpers ──
+async function api(path, options) {
+  try { const r = await fetch(API + path, options); if (!r.ok) throw new Error('HTTP ' + r.status); return await r.json(); } catch (e) { console.error('[api]', path, e); return null; }
+}
+function esc(s) { if (!s) return ''; return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+/** Escape a string for embedding in a single-quoted JS string inside an HTML onclick attribute. */
+function escJs(s) { if (!s) return ''; return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+/** Lightweight Markdown→HTML renderer. Zero dependencies.
+ *  Supports: headings, bold, italic, inline code, code blocks, links, lists, hr, blockquotes, paragraphs. */
+function renderMd(raw) {
+  if (!raw) return '';
+  const s = raw.replace(/\r\n/g, '\n');
+  let html = '';
+  let inCodeBlock = false;
+  let codeBlockContent = '';
+  let inList = false;
+  let listType = '';
+
+  const lines = s.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Code block toggle
+    if (line.trimStart().startsWith('```')) {
+      if (inCodeBlock) {
+        html += '<pre style="background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;overflow-x:auto;font-size:0.82rem;line-height:1.5;margin:8px 0"><code>' + esc(codeBlockContent.trimEnd()) + '</code></pre>';
+        codeBlockContent = '';
+        inCodeBlock = false;
+      } else {
+        if (inList) { html += listType === 'ul' ? '</ul>' : '</ol>'; inList = false; }
+        inCodeBlock = true;
+      }
+      continue;
+    }
+    if (inCodeBlock) { codeBlockContent += line + '\n'; continue; }
+
+    // Close list if line doesn't continue it
+    if (inList && !/^\s*[-*+]\s|^\s*\d+\.\s/.test(line) && line.trim() !== '') {
+      html += listType === 'ul' ? '</ul>' : '</ol>';
+      inList = false;
+    }
+
+    // Headings
+    const hMatch = line.match(/^(#{1,6})\s+(.+)/);
+    if (hMatch) { const lvl = hMatch[1].length; html += `<h${lvl} style="font-size:${1.2 - lvl * 0.08}rem;font-weight:600;margin:12px 0 6px">${inlineMd(hMatch[2])}</h${lvl}>`; continue; }
+
+    // HR
+    if (/^[-*_]{3,}\s*$/.test(line)) { html += '<hr style="border:none;border-top:1px solid var(--border);margin:12px 0">'; continue; }
+
+    // Blockquote
+    if (line.startsWith('>')) { html += `<blockquote style="border-left:3px solid var(--border);padding-left:12px;color:var(--text-secondary);margin:6px 0">${inlineMd(line.replace(/^>\s?/, ''))}</blockquote>`; continue; }
+
+    // Unordered list
+    const ulMatch = line.match(/^\s*[-*+]\s+(.*)/);
+    if (ulMatch) {
+      if (!inList || listType !== 'ul') { if (inList) html += '</ol>'; html += '<ul style="margin:6px 0;padding-left:20px">'; inList = true; listType = 'ul'; }
+      html += `<li style="margin:2px 0">${inlineMd(ulMatch[1])}</li>`;
+      continue;
+    }
+
+    // Ordered list
+    const olMatch = line.match(/^\s*\d+\.\s+(.*)/);
+    if (olMatch) {
+      if (!inList || listType !== 'ol') { if (inList) html += '</ul>'; html += '<ol style="margin:6px 0;padding-left:20px">'; inList = true; listType = 'ol'; }
+      html += `<li style="margin:2px 0">${inlineMd(olMatch[1])}</li>`;
+      continue;
+    }
+
+    // Empty line = paragraph break
+    if (line.trim() === '') { html += '<div style="height:8px"></div>'; continue; }
+
+    // Regular paragraph
+    html += `<p style="margin:4px 0;line-height:1.65">${inlineMd(line)}</p>`;
+  }
+
+  if (inList) html += listType === 'ul' ? '</ul>' : '</ol>';
+  if (inCodeBlock) html += '<pre style="background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;overflow-x:auto;font-size:0.82rem"><code>' + esc(codeBlockContent) + '</code></pre>';
+  return html;
+}
+
+/** Inline markdown: bold, italic, code, links */
+function inlineMd(text) {
+  let s = esc(text);
+  s = s.replace(/`([^`]+)`/g, '<code style="background:var(--bg-primary);padding:1px 5px;border-radius:3px;font-size:0.85em">$1</code>');
+  s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/__(.+?)__/g, '<strong>$1</strong>');
+  s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  s = s.replace(/_(.+?)_/g, '<em>$1</em>');
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--accent)">$1</a>');
+  return s;
+}
+function formatDate(iso) {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso), now = new Date(), ms = now - d;
+    const min = Math.floor(ms/60000), hr = Math.floor(ms/3600000), day = Math.floor(ms/86400000);
+    if (min < 1) return 'just now'; if (min < 60) return min + 'm ago';
+    if (hr < 24) return hr + 'h ago'; if (day < 7) return day + 'd ago';
+    return d.toLocaleDateString(undefined, { month:'short', day:'numeric', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
+  } catch { return iso; }
+}
+function parseTags(t) { if (Array.isArray(t)) return t; if (typeof t === 'string') { try { const p = JSON.parse(t); if (Array.isArray(p)) return p; } catch {} } return []; }
+function catLabel(c) { return (c || 'other').replace(/_/g, ' ').replace(/\b\w/g, x => x.toUpperCase()); }
+function confClass(c) { return c >= 0.8 ? 'high' : c >= 0.5 ? 'mid' : 'low'; }
+function growthBadge(g) { const cls = g || 'seedling'; return `<span class="badge-growth badge-${cls}">${GROWTH_EMOJI[cls] || ''} ${catLabel(cls)}</span>`; }
+function catBadge(cat) { return `<span class="badge badge-${esc(cat)}" style="background:${CAT_COLORS[cat]||'var(--bg-tertiary)'};color:${CAT_COLORS[cat]?'#fff':'var(--text-secondary)'}">${esc(catLabel(cat))}</span>`; }
+
+// ── Top Tab Navigation ──
+document.getElementById('top-tabs').addEventListener('click', function(e) {
+  const tab = e.target.closest('.top-tab');
+  if (!tab) return;
+  const tabKey = tab.dataset.tab;
+  if (tabKey === currentTopTab) return;
+  document.querySelectorAll('.top-tab').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.top-panel').forEach(p => p.classList.remove('active'));
+  tab.classList.add('active');
+  document.getElementById('panel-' + tabKey).classList.add('active');
+  currentTopTab = tabKey;
+  if (tabKey === 'data') { memoriesLoaded = false; loadMemories(); }
+  if (tabKey === 'sync') renderSyncPanel();
+  if (tabKey === 'settings') renderSettingsPanel();
+});
+
+// ── Sidebar rendering ──
+async function loadSidebarData() {
+  const [topicsRes, skillsRes, tasksRes, knowledgeRes, timelineRes, statsRes, perceptionsRes] = await Promise.all([
+    api('/topics'), api('/skills'), api('/tasks'), api('/knowledge?limit=500'), api('/timeline?days=14'), api('/stats'),
+    api('/perceptions?state=active,snoozed&limit=50')
+  ]);
+  sidebarData.topics = topicsRes?.items || [];
+  sidebarData.skills = skillsRes?.items || [];
+  sidebarData.tasks = (tasksRes?.items || []).filter(t => t.status !== 'done');
+  sidebarData.knowledgeCards = knowledgeRes?.items || [];
+  sidebarData.risks = sidebarData.knowledgeCards.filter(c => c.category === 'pitfall' || c.category === 'risk');
+  sidebarData.timeline = timelineRes?.by_day || [];
+  sidebarData.perceptions = perceptionsRes?.items || [];
+  sidebarData.perceptionCounts = perceptionsRes?.counts || {};
+  if (statsRes) statsData = statsRes;
+  updateStatsBar();
+
+  // Render sidebar and overview immediately with core data
+  renderSidebar();
+  navigate(selectedItem);
+
+  // Load workspace scanner data in background (non-blocking — may not be available)
+  // Re-renders sidebar once workspace data arrives
+  try {
+    const [wsCodeRes, wsDocsRes, wsWikiRes, wsScanRes] = await Promise.all([
+      api('/scan/files?category=code&limit=500'),
+      api('/scan/files?category=docs&limit=200'),
+      api('/scan/files?category=wiki&limit=300'),
+      api('/scan/status'),
+    ]);
+    sidebarData.wsCode = wsCodeRes?.files || [];
+    sidebarData.wsDocs = wsDocsRes?.files || [];
+    sidebarData.wsWiki = wsWikiRes?.files || [];
+    sidebarData.scanStatus = wsScanRes || null;
+    renderSidebar(document.getElementById('sidebar-filter')?.value || '');
+  } catch (e) { console.warn('[workspace] scan data load failed:', e); }
+}
+
+function renderSidebar(filter = '') {
+  // Save current collapsed state from DOM before re-render
+  for (const id of Object.keys(sidebarCollapsed)) {
+    const el = document.getElementById('sb-grp-' + id);
+    if (el) sidebarCollapsed[id] = el.classList.contains('collapsed');
+  }
+  const f = filter.toLowerCase();
+  let html = '';
+
+  // Overview (top-level)
+  html += `<div class="sb-top-item${selectedItem.type==='overview'?' active':''}" onclick="navigate({type:'overview'})">
+    <span class="sb-group-icon">&#127968;</span> ${t('sidebar.overview')}
+  </div>`;
+
+  // Awareness / Perception Center (top-level)
+  const activePerceptions = sidebarData.perceptions.filter(p => p.state === 'active' && p.exposure_count < 3);
+  const guardCount = activePerceptions.filter(p => p.signal_type === 'guard').length;
+  const perceptionBadge = activePerceptions.length > 0
+    ? `<span class="sb-group-count" style="background:${guardCount > 0 ? 'rgba(239,68,68,0.15)' : 'var(--bg-tertiary)'};color:${guardCount > 0 ? 'var(--red)' : 'var(--text-muted)'}">${activePerceptions.length}</span>`
+    : '';
+  html += `<div class="sb-top-item${selectedItem.type==='perceptions'?' active':''}" onclick="navigate({type:'perceptions'})">
+    <span class="sb-group-icon">&#128065;</span> ${t('sidebar.awareness')}${perceptionBadge}
+  </div>`;
+
+  // Topics group
+  const topics = sidebarData.topics.filter(topic => !f || topic.title.toLowerCase().includes(f));
+  html += sidebarGroup('topics', '&#128218;', t('sidebar.topics'), topics.length, sidebarCollapsed.topics ?? false,
+    topics.map(topic => sidebarItem('topic', topic.id, topic.title, topic.card_count, 'var(--accent)')).join(''));
+
+  // Engineering Cards
+  const engCards = sidebarData.knowledgeCards.filter(c => ENGINEERING_CATS.includes(c.category) && (!f || (c.title||'').toLowerCase().includes(f)));
+  html += sidebarGroup('eng', '&#9881;', t('sidebar.eng_cards'), engCards.length, sidebarCollapsed.eng ?? true,
+    groupCardsByCategory(engCards, f));
+
+  // Personal Cards
+  const persCards = sidebarData.knowledgeCards.filter(c => PERSONAL_CATS.includes(c.category) && (!f || (c.title||'').toLowerCase().includes(f)));
+  html += sidebarGroup('pers', '&#128100;', t('sidebar.pers_cards'), persCards.length, sidebarCollapsed.pers ?? true,
+    groupCardsByCategory(persCards, f));
+
+  // Skills (top-level)
+  const activeSkills = sidebarData.skills.filter(s => s.status === 'active');
+  html += `<div class="sb-top-item${selectedItem.type==='skills'?' active':''}" onclick="navigate({type:'skills'})">
+    <span class="sb-group-icon">&#9889;</span> ${t('sidebar.skills')}
+    <span class="sb-group-count">${activeSkills.length}</span>
+  </div>`;
+
+  // Tasks group
+  const tasksFiltered = sidebarData.tasks.filter(task => !f || (task.title||'').toLowerCase().includes(f)).slice(0, 15);
+  html += sidebarGroup('tasks', '&#9745;', t('sidebar.tasks'), sidebarData.tasks.length, sidebarCollapsed.tasks ?? false,
+    tasksFiltered.map(task => {
+      const pColor = task.priority === 'high' ? 'var(--red)' : task.priority === 'medium' ? 'var(--yellow)' : 'var(--green)';
+      return sidebarItem('task', task.id, task.title || t('common.untitled'), null, pColor);
+    }).join(''));
+
+  // Risks group
+  const risks = sidebarData.risks.filter(r => !f || (r.title||'').toLowerCase().includes(f)).slice(0, 10);
+  html += sidebarGroup('risks', '&#9888;', t('sidebar.risks'), sidebarData.risks.length, sidebarCollapsed.risks ?? true,
+    risks.map(r => sidebarItem('risk', r.id, r.title || t('common.untitled'), null, 'var(--red)')).join(''));
+
+  // Timeline group
+  const tl = sidebarData.timeline.filter(d => !f || d.date.includes(f)).slice(0, 14);
+  html += sidebarGroup('timeline', '&#128197;', t('sidebar.timeline'), sidebarData.timeline.length, sidebarCollapsed.timeline ?? true,
+    tl.map(d => sidebarItem('timeline_day', d.date, d.date, d.count)).join(''));
+
+  // ── Workspace Scanner sections ──
+  const wsCode = sidebarData.wsCode || [];
+  const wsDocs = sidebarData.wsDocs || [];
+  const wsWiki = sidebarData.wsWiki || [];
+  if (wsCode.length > 0 || wsDocs.length > 0 || wsWiki.length > 0) {
+    // Project divider
+    html += `<div style="display:flex;align-items:center;gap:8px;padding:10px 14px 4px">
+      <div style="flex:1;height:1px;background:var(--border)"></div>
+      <span style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.15em;color:var(--text-muted)">Project</span>
+      <div style="flex:1;height:1px;background:var(--border)"></div>
+    </div>`;
+
+    // Code files grouped by top-level directory
+    const filteredCode = wsCode.filter(file => !f || (file.relativePath || file.title || '').toLowerCase().includes(f));
+    const codeDirs = {};
+    for (const file of filteredCode) {
+      const rel = file.relativePath || file.title || '';
+      const parts = rel.split('/');
+      const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : '(root)';
+      if (!codeDirs[dir]) codeDirs[dir] = [];
+      codeDirs[dir].push(file);
+    }
+    const dirEntries = Object.entries(codeDirs).sort(([a],[b]) => a.localeCompare(b));
+    let codeItems = '';
+    for (const [dir, files] of dirEntries.slice(0, 30)) {
+      codeItems += `<div class="sb-item" style="padding-left:28px;color:var(--text-muted);font-size:0.75rem;cursor:default">
+        <span style="margin-right:4px">&#128193;</span> ${esc(dir)} <span class="sb-item-badge">${files.length}</span>
+      </div>`;
+      for (const file of files.slice(0, 10)) {
+        const fileName = (file.relativePath || file.title).split('/').pop();
+        codeItems += sidebarItem('ws_file', file.id, fileName, null, 'var(--cyan)');
+      }
+    }
+    html += sidebarGroupClickable('ws_code', '&#128187;', 'Code', filteredCode.length, 'ws_code_list', sidebarCollapsed.ws_code ?? true, codeItems);
+
+    // Docs
+    const filteredDocs = wsDocs.filter(file => !f || (file.relativePath || file.title || '').toLowerCase().includes(f));
+    html += sidebarGroupClickable('ws_docs', '&#128196;', 'Docs', filteredDocs.length, 'ws_docs_list', sidebarCollapsed.ws_docs ?? true,
+      filteredDocs.slice(0, 30).map(doc => {
+        const name = (doc.relativePath || doc.title).split('/').pop();
+        return sidebarItem('ws_doc', doc.id, name || doc.title, null, 'var(--yellow)');
+      }).join(''));
+
+    // Wiki pages
+    const filteredWiki = wsWiki.filter(page => !f || (page.title || '').toLowerCase().includes(f));
+    const modulePages = filteredWiki.filter(p => p.id?.startsWith('wiki:modules/'));
+    const conceptPages = filteredWiki.filter(p => p.id?.startsWith('wiki:concepts/'));
+    let wikiItems = '';
+    if (modulePages.length > 0) {
+      wikiItems += `<div class="sb-item" style="padding-left:28px;color:var(--text-muted);font-size:0.75rem;cursor:default">
+        &#128211; Modules <span class="sb-item-badge">${modulePages.length}</span>
+      </div>`;
+      for (const p of modulePages.slice(0, 20)) {
+        wikiItems += sidebarItem('wiki_page', p.id, p.title || p.id, null, 'var(--blue)');
+      }
+    }
+    if (conceptPages.length > 0) {
+      wikiItems += `<div class="sb-item" style="padding-left:28px;color:var(--text-muted);font-size:0.75rem;cursor:default">
+        &#128215; Concepts <span class="sb-item-badge">${conceptPages.length}</span>
+      </div>`;
+      for (const p of conceptPages.slice(0, 20)) {
+        wikiItems += sidebarItem('wiki_page', p.id, p.title || p.id, null, 'var(--purple)');
+      }
+    }
+    html += sidebarGroupClickable('ws_wiki', '&#128214;', 'Wiki Pages', filteredWiki.length, 'ws_wiki_list', sidebarCollapsed.ws_wiki ?? false, wikiItems);
+  }
+
+  document.getElementById('sidebar-scroll').innerHTML = html;
+}
+
+function sidebarGroup(id, icon, label, count, collapsed, itemsHtml) {
+  const cls = collapsed ? ' collapsed' : '';
+  return `<div class="sb-group${cls}" id="sb-grp-${id}">
+    <div class="sb-group-header" onclick="this.parentElement.classList.toggle('collapsed');sidebarCollapsed['${id}']=this.parentElement.classList.contains('collapsed')">
+      <span class="sb-group-icon">${icon}</span>
+      <span class="sb-group-label">${esc(label)}</span>
+      <span class="sb-group-count">${count}</span>
+      <span class="sb-group-chevron">&#9660;</span>
+    </div>
+    <div class="sb-group-items">${itemsHtml || '<div style="padding:6px 14px 6px 40px;font-size:0.78rem;color:var(--text-muted)">None</div>'}</div>
+  </div>`;
+}
+
+/** Sidebar group with a clickable header that navigates to a list view */
+function sidebarGroupClickable(id, icon, label, count, navType, collapsed, itemsHtml) {
+  const cls = collapsed ? ' collapsed' : '';
+  const isActive = selectedItem.type === navType;
+  return `<div class="sb-group${cls}" id="sb-grp-${id}">
+    <div class="sb-group-header" style="gap:4px">
+      <span class="sb-group-icon">${icon}</span>
+      <span class="sb-group-label" style="cursor:pointer;${isActive ? 'color:var(--accent);font-weight:600' : ''}" onclick="event.stopPropagation();navigate({type:'${navType}'})">${esc(label)}</span>
+      <span class="sb-group-count">${count}</span>
+      <span class="sb-group-chevron" style="cursor:pointer" onclick="event.stopPropagation();this.parentElement.parentElement.classList.toggle('collapsed');sidebarCollapsed['${id}']=this.parentElement.parentElement.classList.contains('collapsed')">&#9660;</span>
+    </div>
+    <div class="sb-group-items">${itemsHtml || '<div style="padding:6px 14px 6px 40px;font-size:0.78rem;color:var(--text-muted)">None</div>'}</div>
+  </div>`;
+}
+
+function sidebarItem(type, id, label, badge, dotColor) {
+  const active = selectedItem.type === type && (selectedItem.id === id || selectedItem.date === id) ? ' active' : '';
+  const dot = dotColor ? `<span class="sb-item-dot" style="background:${dotColor}"></span>` : '';
+  const bdg = badge != null ? `<span class="sb-item-badge">${badge}</span>` : '';
+  const safeId = escJs(id);
+  const clickData = type === 'timeline_day' ? `{type:'${type}',date:'${safeId}'}` : `{type:'${type}',id:'${safeId}'}`;
+  return `<div class="sb-item${active}" onclick="navigate(${clickData})">${dot}<span class="sb-item-label">${esc(label)}</span>${bdg}</div>`;
+}
+
+function groupCardsByCategory(cards, filter) {
+  const groups = {};
+  for (const c of cards) {
+    const cat = c.category || 'other';
+    if (!groups[cat]) groups[cat] = [];
+    groups[cat].push(c);
+  }
+  let html = '';
+  for (const [cat, items] of Object.entries(groups)) {
+    // Sort: evergreen first
+    items.sort((a, b) => {
+      const order = { evergreen: 0, budding: 1, seedling: 2 };
+      return (order[a.growth_stage] ?? 2) - (order[b.growth_stage] ?? 2);
+    });
+    html += `<div style="padding:2px 0 2px 28px;font-size:0.74rem;color:var(--text-muted);font-weight:600;margin-top:4px">${esc(catLabel(cat))} (${items.length})</div>`;
+    for (const c of items.slice(0, 20)) {
+      const gEmoji = c.growth_stage === 'evergreen' ? '&#127795;' : c.growth_stage === 'budding' ? '&#127807;' : '';
+      html += sidebarItem('card', c.id, (gEmoji ? gEmoji + ' ' : '') + (c.title || 'Untitled'), null, CAT_COLORS[cat]);
+    }
+  }
+  return html;
+}
+
+function filterSidebar(val) { renderSidebar(val); }
+
+// ── Navigation / Content Routing ──
+function navigate(item) {
+  selectedItem = item;
+  renderSidebar(document.getElementById('sidebar-filter')?.value || '');
+  const area = document.getElementById('content-area');
+  area.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+  switch (item.type) {
+    case 'overview': renderOverview(area); break;
+    case 'topic': renderTopicDetail(area, item.id); break;
+    case 'card': renderCardDetail(area, item.id); break;
+    case 'task': renderTaskDetail(area, item.id); break;
+    case 'risk': renderRiskDetail(area, item.id); break;
+    case 'timeline_day': renderTimelineDay(area, item.date); break;
+    case 'skills': renderSkillsView(area); break;
+    case 'memory': renderMemoryDetail(area, item.id); break;
+    case 'perceptions': renderPerceptionCenter(area); break;
+    case 'ws_file': renderWorkspaceFile(area, item.id); break;
+    case 'ws_doc': renderWorkspaceDoc(area, item.id); break;
+    case 'wiki_page': renderWikiPage(area, item.id); break;
+    case 'ws_code_list': renderWorkspaceList(area, 'code'); break;
+    case 'ws_docs_list': renderWorkspaceList(area, 'docs'); break;
+    case 'ws_wiki_list': renderWorkspaceList(area, 'wiki'); break;
+    default: area.innerHTML = '<div class="empty-state"><p>Select an item from the sidebar.</p></div>';
+  }
+}
+
+// ── Overview View ──
+function renderOverview(area) {
+  const cards = sidebarData.knowledgeCards;
+  const evergreens = cards.filter(c => c.growth_stage === 'evergreen').length;
+  const totalTopics = sidebarData.topics.length;
+  const totalSkills = sidebarData.skills.filter(s => s.status === 'active').length;
+  const openTasks = sidebarData.tasks.length;
+
+  let html = '';
+
+  // Attention Bar — only shows if there are active, non-exposed-cap signals
+  const activeSigs = sidebarData.perceptions.filter(p => p.state === 'active' && p.exposure_count < 3);
+  if (activeSigs.length > 0) {
+    const byType = {};
+    for (const s of activeSigs) {
+      byType[s.signal_type] = (byType[s.signal_type] || 0) + 1;
+    }
+    const parts = [];
+    if (byType.guard) parts.push(`<span style="color:var(--red)">&#9888; ${t(byType.guard > 1 ? 'attention.guards_plural' : 'attention.guards', { n: byType.guard })}</span>`);
+    if (byType.pattern) parts.push(`<span style="color:var(--blue)">&#128257; ${t(byType.pattern > 1 ? 'attention.patterns_plural' : 'attention.patterns', { n: byType.pattern })}</span>`);
+    if (byType.resonance) parts.push(`<span style="color:var(--purple)">&#128204; ${t('attention.resonance', { n: byType.resonance })}</span>`);
+    if (byType.staleness) parts.push(`<span style="color:var(--yellow)">&#9203; ${t('attention.stale', { n: byType.staleness })}</span>`);
+    if (byType.contradiction) parts.push(`<span style="color:var(--orange)">&#9889; ${t(byType.contradiction > 1 ? 'attention.conflicts_plural' : 'attention.conflicts', { n: byType.contradiction })}</span>`);
+    if (byType.related_decision) parts.push(`<span style="color:var(--cyan)">&#128205; ${t('attention.related', { n: byType.related_decision })}</span>`);
+
+    html += `<div style="background:linear-gradient(90deg, rgba(59,130,246,0.08), rgba(168,85,247,0.08));border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--radius);padding:12px 16px;margin-bottom:20px;display:flex;align-items:center;gap:12px">
+      <span style="font-size:1.2rem">&#128065;</span>
+      <div style="flex:1">
+        <div style="font-weight:600;font-size:0.88rem;margin-bottom:2px">${t('attention.title')}</div>
+        <div style="font-size:0.78rem;color:var(--text-secondary);display:flex;gap:10px;flex-wrap:wrap">${parts.join(' · ')}</div>
+      </div>
+      <button class="btn-ghost btn-sm" onclick="navigate({type:'perceptions'})">${t('attention.see_all')}</button>
+    </div>`;
+  }
+
+  // Stats row
+  html += '<div class="stats-row">';
+  html += statCard(cards.length, t('stats.cards'));
+  html += statCard(totalTopics, t('stats.topics'));
+  html += statCard(evergreens, t('stats.evergreens'));
+  html += statCard(totalSkills, t('stats.active_skills'));
+  html += statCard(openTasks, t('stats.open_tasks'));
+  html += '</div>';
+
+  // Workspace scan + embedding status bar
+  const ss = sidebarData.scanStatus;
+  if (ss && ss.status !== 'idle') {
+    const phase = ss.phase || ss.status;
+    const isEmbed = phase === 'embedding';
+    const pct = isEmbed && ss.embed_total > 0
+      ? Math.round((ss.embed_done / ss.embed_total) * 100)
+      : (ss.index_total > 0 ? Math.round((ss.index_done / ss.index_total) * 100) : null);
+    const detail = isEmbed
+      ? `Embedding: ${ss.embed_done || 0} / ${ss.embed_total || '?'}`
+      : `${phase}: ${ss.index_done || 0} / ${ss.index_total || '?'}`;
+    html += `<div style="background:linear-gradient(90deg,rgba(56,189,248,0.06),rgba(56,189,248,0.02));border:1px solid rgba(56,189,248,0.2);border-radius:var(--radius);padding:10px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px">
+      <span style="font-size:0.9rem;animation:spin 1s linear infinite">&#9881;</span>
+      <div style="flex:1">
+        <div style="font-size:0.82rem;font-weight:500;color:var(--text-primary)">${esc(detail)}</div>
+        ${pct !== null ? `<div style="height:3px;border-radius:2px;background:var(--bg-tertiary);margin-top:4px;overflow:hidden"><div style="height:100%;border-radius:2px;background:var(--accent);width:${pct}%;transition:width 0.3s"></div></div>` : ''}
+      </div>
+    </div>`;
+  }
+
+  // Topics grid
+  if (sidebarData.topics.length > 0) {
+    html += `<div class="section-gap"><div class="section-title">${t('overview.topics_section')}</div><div class="grid-3">`;
+    for (const topic of sidebarData.topics.slice(0, 9)) {
+      html += `<div class="card-box card-box-clickable" onclick="navigate({type:'topic',id:'${esc(topic.id)}'})">
+        <div style="font-weight:600;font-size:0.88rem;margin-bottom:4px">${esc(topic.title)}</div>
+        <div style="font-size:0.78rem;color:var(--text-muted)">${t('stats.cards_count', { n: topic.card_count })}</div>
+      </div>`;
+    }
+    html += '</div></div>';
+  }
+
+  // Recent cards
+  const recentCards = [...cards].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')).slice(0, 8);
+  if (recentCards.length > 0) {
+    html += `<div class="section-gap"><div class="section-title">${t('overview.recent_cards')}</div><div class="grid-2">`;
+    for (const c of recentCards) {
+      html += renderKCCard(c);
+    }
+    html += '</div></div>';
+  }
+
+  // Tasks + Risks row
+  const taskItems = sidebarData.tasks.slice(0, 5);
+  const riskItems = sidebarData.risks.slice(0, 5);
+  if (taskItems.length > 0 || riskItems.length > 0) {
+    html += '<div class="section-gap" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">';
+
+    html += `<div><div class="section-title">${t('overview.pending_tasks')}</div>`;
+    if (taskItems.length === 0) html += `<div style="color:var(--text-muted);font-size:0.82rem">${t('overview.no_tasks')}</div>`;
+    for (const task of taskItems) {
+      html += `<div class="card-box card-box-clickable" style="margin-bottom:8px;padding:12px" onclick="navigate({type:'task',id:'${esc(task.id)}'})">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="priority-dot ${esc(task.priority||'medium')}"></span>
+          <span style="font-size:0.85rem;font-weight:500">${esc(task.title || t('common.untitled'))}</span>
+        </div>
+      </div>`;
+    }
+    html += '</div>';
+
+    html += `<div><div class="section-title">${t('overview.active_risks')}</div>`;
+    if (riskItems.length === 0) html += `<div style="color:var(--text-muted);font-size:0.82rem">${t('overview.no_risks')}</div>`;
+    for (const r of riskItems) {
+      html += `<div class="card-box card-box-clickable" style="margin-bottom:8px;padding:12px" onclick="navigate({type:'risk',id:'${esc(r.id)}'})">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="color:var(--red);font-size:0.9rem">&#9888;</span>
+          <span style="font-size:0.85rem;font-weight:500">${esc(r.title || t('common.untitled'))}</span>
+        </div>
+      </div>`;
+    }
+    html += '</div></div>';
+  }
+
+  // Skills preview
+  if (totalSkills > 0) {
+    html += `<div class="section-gap"><div class="section-title">${t('overview.active_skills')} <span style="font-weight:400;cursor:pointer;color:var(--accent)" onclick="navigate({type:'skills'})">${t('overview.view_all')}</span></div><div class="grid-3">`;
+    const topSkills = sidebarData.skills.filter(s => s.status === 'active').slice(0, 6);
+    for (const s of topSkills) {
+      html += renderSkillCard(s);
+    }
+    html += '</div></div>';
+  }
+
+  area.innerHTML = html;
+}
+
+function statCard(num, label) {
+  return `<div class="stat-card"><div class="num">${num}</div><div class="label">${esc(label)}</div></div>`;
+}
+
+function renderKCCard(c) {
+  const tags = parseTags(c.tags).slice(0, 3).map(t => `<span class="badge badge-tag">${esc(t)}</span>`).join('');
+  const conf = c.confidence != null ? c.confidence : 0.8;
+  return `<div class="card-box card-box-clickable" onclick="navigate({type:'card',id:'${esc(c.id)}'})" style="border-left:3px solid ${CAT_COLORS[c.category]||'var(--border)'}">
+    <div style="font-weight:600;font-size:0.88rem;margin-bottom:4px">${esc(c.title || 'Untitled')}</div>
+    <div style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:8px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(c.summary || '')}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+      ${catBadge(c.category)} ${growthBadge(c.growth_stage)}
+      <span class="badge badge-confidence ${confClass(conf)}">${Math.round(conf*100)}%</span>
+      ${tags}
+    </div>
+  </div>`;
+}
+
+// ── Topic Detail ──
+function renderTopicDetail(area, topicId) {
+  const topic = sidebarData.topics.find(t => t.id === topicId);
+  if (!topic) { area.innerHTML = '<div class="empty-state"><p>Topic not found.</p></div>'; return; }
+
+  let cards;
+  if (topic.source === 'moc') {
+    // MOC card — show it as a card detail (it IS a knowledge card)
+    renderCardDetail(area, topicId);
+    return;
+  } else if (topic.source === 'tag') {
+    // Tag-based topic — find cards that have this tag
+    const tagName = topicId.replace('tag_', '').toLowerCase();
+    cards = sidebarData.knowledgeCards.filter(c => {
+      const tags = parseTags(c.tags).map(t => t.toLowerCase());
+      return tags.includes(tagName);
+    });
+  } else {
+    cards = [];
+  }
+
+  cards.sort((a, b) => {
+    const go = { evergreen: 0, budding: 1, seedling: 2 };
+    return (go[a.growth_stage] ?? 2) - (go[b.growth_stage] ?? 2);
+  });
+
+  let html = breadcrumb([{ label: 'Overview', item: { type: 'overview' } }, { label: topic.title }]);
+  html += `<h2 style="font-size:1.2rem;margin-bottom:4px">${esc(topic.title)}</h2>`;
+  if (topic.summary) {
+    html += `<div style="font-size:0.88rem;color:var(--text-secondary);margin-bottom:12px">${esc(topic.summary)}</div>`;
+  }
+  html += `<div style="color:var(--text-muted);font-size:0.82rem;margin-bottom:20px">${cards.length} cards${topic.last_updated_at ? ' &middot; Last updated ' + formatDate(topic.last_updated_at) : ''}</div>`;
+
+  if (cards.length === 0) {
+    html += '<div class="empty-state"><p>No cards found for this topic.</p></div>';
+  } else {
+    html += '<div class="grid-2">';
+    for (const c of cards) { html += renderKCCard(c); }
+    html += '</div>';
+  }
+
+  area.innerHTML = html;
+}
+
+// ── Card Detail ──
+async function renderCardDetail(area, cardId) {
+  const data = await api('/knowledge/' + encodeURIComponent(cardId));
+  if (!data || data.error) { area.innerHTML = '<div class="empty-state"><p>Card not found.</p></div>'; return; }
+
+  const c = data;
+  const tags = parseTags(c.tags);
+  const conf = c.confidence != null ? c.confidence : 0.8;
+  const catTitle = catLabel(c.category || 'other');
+
+  let html = breadcrumb([{ label: 'Overview', item: { type: 'overview' } }, { label: catTitle, item: { type: 'topic', id: 'topic_' + c.category } }, { label: c.title || 'Untitled' }]);
+
+  html += '<div class="card-detail">';
+
+  // Main content
+  html += '<div class="card-detail-main">';
+  html += `<div class="card-detail-title">${esc(c.title || 'Untitled')}</div>`;
+  html += `<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">${catBadge(c.category)} ${growthBadge(c.growth_stage)} <span class="badge badge-confidence ${confClass(conf)}">${Math.round(conf*100)}%</span></div>`;
+  html += `<div class="card-detail-body">${renderMd(c.summary || 'No content.')}</div>`;
+
+  // Evolution chain
+  if (c.evolution_chain && c.evolution_chain.length > 1) {
+    html += '<div style="margin-top:24px"><div class="section-title">Evolution Chain</div>';
+    for (const e of c.evolution_chain) {
+      const isCurrent = e.id === cardId;
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;${isCurrent?'font-weight:600;color:var(--accent)':'color:var(--text-secondary)'}">
+        <span style="font-size:0.75rem">${isCurrent ? '&#9658;' : '&#9679;'}</span>
+        <span style="font-size:0.82rem;cursor:pointer;text-decoration:${isCurrent?'none':'underline'}" onclick="${isCurrent?'':`navigate({type:'card',id:'${esc(e.id)}'})`}">${esc(e.title || e.id)}</span>
+        <span style="font-size:0.72rem;color:var(--text-muted)">${formatDate(e.created_at)}</span>
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  // MOC member cards
+  if (c.members && c.members.length > 0) {
+    html += `<div style="margin-top:24px"><div class="section-title" style="margin-bottom:8px">Member Cards <span class="badge badge-cat">${c.members.length}</span></div>`;
+    html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">';
+    for (const m of c.members) {
+      const mConf = m.confidence != null ? Math.round(m.confidence * 100) + '%' : '';
+      html += `<div style="display:flex;align-items:flex-start;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);cursor:pointer"
+        onclick="navigate({type:'card',id:'${esc(m.id)}'})">
+        ${catBadge(m.category)}
+        <div style="flex:1;min-width:0">
+          <div style="font-size:0.82rem;font-weight:500">${esc(m.title || 'Untitled')}</div>
+          <div style="font-size:0.75rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((m.summary || '').substring(0, 120))}</div>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;flex-shrink:0">
+          ${growthBadge(m.growth_stage)}
+          ${mConf ? `<span class="badge badge-confidence ${confClass(m.confidence)}" style="font-size:0.68rem">${mConf}</span>` : ''}
+        </div>
+      </div>`;
+    }
+    html += '</div></div>';
+  }
+
+  // Tags
+  if (tags.length > 0) {
+    html += `<div style="margin-top:20px;display:flex;gap:6px;flex-wrap:wrap">${tags.map(t => `<span class="badge badge-tag">${esc(t)}</span>`).join('')}</div>`;
+  }
+  html += '</div>';
+
+  // Sidebar
+  html += '<div class="card-detail-sidebar">';
+  html += '<div class="card-box" style="margin-bottom:12px"><div class="section-title" style="margin-bottom:8px">Metadata</div>';
+  html += '<table class="meta-table">';
+  html += metaRow('Category', catTitle);
+  html += metaRow('Growth', (GROWTH_EMOJI[c.growth_stage]||'') + ' ' + catLabel(c.growth_stage || 'seedling'));
+  html += metaRow('Confidence', Math.round(conf * 100) + '%');
+  html += metaRow('Created', formatDate(c.created_at));
+  if (c.last_touched_at) html += metaRow('Last Touched', formatDate(c.last_touched_at));
+  if (c.link_count_incoming > 0) html += metaRow('Inbound Links', c.link_count_incoming);
+  if (c.link_count_outgoing > 0) html += metaRow('Outbound Links', c.link_count_outgoing);
+  if (c.evolution_type && c.evolution_type !== 'initial') html += metaRow('Evolution', catLabel(c.evolution_type));
+  html += '</table></div>';
+
+  // Related cards
+  if (c.related_cards && c.related_cards.length > 0) {
+    html += '<div class="card-box"><div class="section-title" style="margin-bottom:8px">Related Cards</div>';
+    for (const r of c.related_cards) {
+      html += `<div style="padding:6px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="navigate({type:'card',id:'${esc(r.id)}'})">
+        <div style="font-size:0.82rem;font-weight:500;color:var(--accent)">${esc(r.title || 'Untitled')}</div>
+        <div style="font-size:0.72rem;color:var(--text-muted)">${growthBadge(r.growth_stage)} ${formatDate(r.created_at)}</div>
+      </div>`;
+    }
+    html += '</div>';
+  }
+  html += '</div></div>';
+
+  area.innerHTML = html;
+}
+
+function metaRow(label, value) {
+  return `<tr><td>${esc(label)}</td><td>${value}</td></tr>`;
+}
+
+function breadcrumb(items) {
+  let html = '<div class="breadcrumb">';
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (i > 0) html += '<span class="sep">/</span>';
+    if (item.item) {
+      html += `<a onclick="navigate(${JSON.stringify(item.item).replace(/"/g, '&quot;')})">${esc(item.label)}</a>`;
+    } else {
+      html += `<span style="color:var(--text-primary)">${esc(item.label)}</span>`;
+    }
+  }
+  html += '</div>';
+  return html;
+}
+
+// ── Task Detail ──
+function renderTaskDetail(area, taskId) {
+  const t = sidebarData.tasks.find(x => x.id === taskId) || findInAllTasks(taskId);
+  if (!t) { area.innerHTML = '<div class="empty-state"><p>Task not found.</p></div>'; return; }
+
+  let html = breadcrumb([{ label: 'Overview', item: { type: 'overview' } }, { label: 'Tasks' }, { label: t.title || 'Untitled' }]);
+  html += `<h2 style="font-size:1.1rem;margin-bottom:12px">${esc(t.title || 'Untitled')}</h2>`;
+  html += `<div style="display:flex;gap:10px;align-items:center;margin-bottom:16px">
+    <span class="priority-dot ${esc(t.priority||'medium')}"></span>
+    <span style="font-size:0.85rem;color:var(--text-muted)">Priority: ${esc(catLabel(t.priority||'medium'))}</span>
+    <select class="task-status-select" data-task-id="${esc(t.id)}" onchange="updateTaskStatus(this)">
+      <option value="open"${t.status==='open'?' selected':''}>Open</option>
+      <option value="in_progress"${t.status==='in_progress'?' selected':''}>In Progress</option>
+      <option value="done"${t.status==='done'?' selected':''}>Done</option>
+    </select>
+  </div>`;
+  if (t.description) html += `<div style="font-size:0.88rem;color:var(--text-secondary)">${renderMd(t.description)}</div>`;
+  html += `<div style="margin-top:16px;font-size:0.78rem;color:var(--text-muted)">Created: ${formatDate(t.created_at)}</div>`;
+
+  area.innerHTML = html;
+}
+
+function findInAllTasks(id) {
+  // fetch synchronously isn't great, but tasks are small
+  return null;
+}
+
+async function updateTaskStatus(select) {
+  const taskId = select.dataset.taskId;
+  await api('/tasks/' + encodeURIComponent(taskId), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: select.value }) });
+  loadSidebarData();
+}
+
+// ── Risk Detail ──
+function renderRiskDetail(area, riskId) {
+  const r = sidebarData.risks.find(x => x.id === riskId);
+  if (!r) { renderCardDetail(area, riskId); return; }
+
+  let html = breadcrumb([{ label: 'Overview', item: { type: 'overview' } }, { label: 'Risks' }, { label: r.title || 'Untitled' }]);
+  html += `<h2 style="font-size:1.1rem;margin-bottom:12px;display:flex;align-items:center;gap:8px"><span style="color:var(--red)">&#9888;</span> ${esc(r.title || 'Untitled')}</h2>`;
+  html += `<div style="font-size:0.88rem;color:var(--text-secondary);margin-bottom:16px">${renderMd(r.summary || '')}</div>`;
+  html += `<div style="font-size:0.78rem;color:var(--text-muted)">Category: ${esc(catLabel(r.category))} &middot; Created: ${formatDate(r.created_at)}</div>`;
+
+  area.innerHTML = html;
+}
+
+// ── Timeline Day ──
+function renderTimelineDay(area, date) {
+  const dayData = sidebarData.timeline.find(d => d.date === date);
+  if (!dayData) { area.innerHTML = `<div class="empty-state"><p>No data for ${esc(date)}.</p></div>`; return; }
+
+  let html = breadcrumb([{ label: 'Overview', item: { type: 'overview' } }, { label: 'Timeline' }, { label: date }]);
+  html += `<h2 style="font-size:1.1rem;margin-bottom:16px">&#128197; ${esc(date)}</h2>`;
+  html += `<div style="color:var(--text-muted);font-size:0.82rem;margin-bottom:16px">${dayData.count} events</div>`;
+
+  for (const ev of dayData.events) {
+    const time = ev.created_at ? new Date(ev.created_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '';
+    const typeLabel = ev.type || 'memory';
+    html += `<div class="tl-event" style="cursor:pointer;border-radius:var(--radius-sm);padding:8px;margin:0 -8px" onclick="navigate({type:'memory',id:'${esc(ev.id)}'})" onmouseover="this.style.background='var(--bg-hover)'" onmouseout="this.style.background=''">
+      <span class="tl-event-time">${esc(time)}</span>
+      <div class="tl-event-content">
+        <span class="badge badge-cat tl-event-type" style="margin-right:6px">${esc(typeLabel)}</span>
+        ${esc(ev.title || 'Untitled')}
+      </div>
+      <span style="font-size:0.72rem;color:var(--text-muted);margin-left:auto">&#8594;</span>
+    </div>`;
+  }
+
+  area.innerHTML = html;
+}
+
+// ── Memory Detail ──
+async function renderMemoryDetail(area, memId) {
+  const data = await api('/memories/' + encodeURIComponent(memId));
+  if (!data || data.error) {
+    area.innerHTML = '<div class="empty-state"><p>Memory not found.</p></div>';
+    return;
+  }
+
+  const tags = Array.isArray(data.tags) ? data.tags : parseTags(data.tags);
+  const content = data.content || data.fts_content || '';
+  const typeLabel = catLabel(data.type || 'memory');
+
+  let html = breadcrumb([{ label: 'Overview', item: { type: 'overview' } }, { label: 'Memory' }, { label: data.title || 'Untitled' }]);
+
+  html += `<div style="display:flex;gap:24px">`;
+
+  // Main content
+  html += `<div style="flex:1;min-width:0">`;
+  html += `<h2 style="font-size:1.2rem;margin-bottom:8px">${esc(data.title || 'Untitled')}</h2>`;
+  html += `<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+    <span class="badge badge-cat">${esc(typeLabel)}</span>
+    ${data.source ? `<span class="badge badge-tag">${esc(data.source)}</span>` : ''}
+    ${tags.map(t => `<span class="badge badge-tag">${esc(t)}</span>`).join('')}
+  </div>`;
+  html += `<div class="card-detail-body" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:16px">${renderMd(content)}</div>`;
+  html += `</div>`;
+
+  // Sidebar metadata
+  html += `<div style="width:240px;flex-shrink:0">`;
+  html += `<div class="card-box"><div class="section-title" style="margin-bottom:8px">Metadata</div>`;
+  html += `<table class="meta-table">`;
+  html += metaRow('Type', typeLabel);
+  if (data.source) html += metaRow('Source', data.source);
+  if (data.agent_role) html += metaRow('Agent Role', data.agent_role);
+  if (data.session_id) html += metaRow('Session', `<span style="font-family:monospace;font-size:0.75rem;word-break:break-all">${esc(data.session_id)}</span>`);
+  html += metaRow('Created', formatDate(data.created_at));
+  if (data.updated_at && data.updated_at !== data.created_at) html += metaRow('Updated', formatDate(data.updated_at));
+  if (data.synced_to_cloud) html += metaRow('Cloud Sync', '&#9989; Synced');
+  html += `</table></div>`;
+  html += `</div>`;
+
+  html += `</div>`;
+  area.innerHTML = html;
+}
+
+// ── Skills View ──
+// ── Perception Center ──
+let perceptionFilter = 'active';
+
+async function renderPerceptionCenter(area) {
+  area.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const data = await api(`/perceptions?state=${perceptionFilter}&limit=200`);
+  if (!data) { area.innerHTML = '<div class="empty-state"><p>Failed to load perceptions.</p></div>'; return; }
+
+  const items = data.items || [];
+  const counts = data.counts || {};
+
+  let html = `<div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
+    <h2 style="font-size:1.2rem;font-weight:700">&#128065; ${t('perception.title')}</h2>
+    <button class="btn-ghost btn-sm" onclick="refreshPerceptions()">&#8635; ${t('perception.cleanup')}</button>
+  </div>`;
+  html += `<div style="color:var(--text-muted);font-size:0.82rem;margin-bottom:16px">
+    ${t('perception.subtitle')}
+  </div>`;
+
+  // Filter tabs
+  const tabs = [
+    { key: 'active,snoozed', label: t('perception.filter.active'), count: (counts.active || 0) + (counts.snoozed || 0) },
+    { key: 'snoozed', label: t('perception.filter.snoozed'), count: counts.snoozed || 0 },
+    { key: 'auto_resolved', label: t('perception.filter.auto_resolved'), count: counts.auto_resolved || 0, icon: '&#129302;' },
+    { key: 'dismissed', label: t('perception.filter.dismissed'), count: counts.dismissed || 0 },
+    { key: 'all', label: t('perception.filter.all'), count: Object.values(counts).reduce((a, b) => a + b, 0) },
+  ];
+  html += '<div style="display:flex;gap:6px;margin-bottom:20px;flex-wrap:wrap">';
+  for (const tab of tabs) {
+    const active = perceptionFilter === tab.key;
+    html += `<button class="btn-ghost btn-sm" style="${active ? 'background:var(--bg-active);color:var(--accent);border-color:var(--accent)' : ''}" onclick="perceptionFilter='${tab.key}';navigate({type:'perceptions'})">${tab.icon || ''} ${esc(tab.label)} (${tab.count})</button>`;
+  }
+  html += '</div>';
+
+  if (items.length === 0) {
+    html += `<div class="empty-state"><div class="icon">&#128065;</div><p>${t('perception.empty', { filter: perceptionFilter })}</p><p style="font-size:0.78rem;margin-top:8px">${t('perception.empty_hint')}</p></div>`;
+    area.innerHTML = html;
+    return;
+  }
+
+  // Group by signal_type
+  const byType = {};
+  for (const p of items) {
+    const typeKey = p.signal_type || 'unknown';
+    if (!byType[typeKey]) byType[typeKey] = [];
+    byType[typeKey].push(p);
+  }
+
+  const typeOrder = ['guard', 'contradiction', 'pattern', 'resonance', 'staleness', 'related_decision', 'unknown'];
+  const typeIcons = { guard: '&#9888;', contradiction: '&#9889;', pattern: '&#128257;', resonance: '&#128204;', staleness: '&#9203;', related_decision: '&#128205;', unknown: '&#10067;' };
+  const typeColors = { guard: 'var(--red)', contradiction: 'var(--orange)', pattern: 'var(--blue)', resonance: 'var(--purple)', staleness: 'var(--yellow)', related_decision: 'var(--cyan)', unknown: 'var(--text-muted)' };
+
+  for (const type of typeOrder) {
+    const list = byType[type];
+    if (!list || list.length === 0) continue;
+    const typeLabel = t('perception.type.' + type);
+    html += `<div class="section-gap">
+      <div class="section-title" style="color:${typeColors[type]};display:flex;align-items:center;gap:6px">
+        <span>${typeIcons[type]}</span> ${esc(typeLabel)} · ${list.length}
+      </div>`;
+    for (const p of list) {
+      html += renderPerceptionCard(p, typeColors[type]);
+    }
+    html += '</div>';
+  }
+
+  area.innerHTML = html;
+}
+
+function renderPerceptionCard(p, color) {
+  const meta = p.metadata || {};
+  const state = p.state || 'active';
+  const expCap = p.exposure_count >= 3;
+  const isResolved = state === 'auto_resolved';
+  const isDismissed = state === 'dismissed';
+  const isSnoozed = state === 'snoozed';
+
+  const badges = [];
+  if (state === 'active' && !expCap) badges.push(`<span class="badge badge-cat" style="background:rgba(59,130,246,0.12);color:var(--accent)">${t('perception.state.active')}</span>`);
+  if (expCap) badges.push(`<span class="badge badge-cat" style="background:rgba(148,163,184,0.15);color:var(--text-muted)">${t('perception.state.hidden')}</span>`);
+  if (isSnoozed) badges.push(`<span class="badge badge-cat" style="background:rgba(234,179,8,0.12);color:var(--yellow)">${t('perception.state.snoozed')}</span>`);
+  if (isResolved) badges.push(`<span class="badge badge-cat" style="background:rgba(34,197,94,0.12);color:var(--green)">${t('perception.state.auto_resolved')}</span>`);
+  if (isDismissed) badges.push(`<span class="badge badge-cat" style="background:rgba(100,116,139,0.15);color:var(--text-muted)">${t('perception.state.dismissed')}</span>`);
+
+  const firstSeen = p.first_seen_at ? formatDate(p.first_seen_at) : '';
+  const lastSeen = p.last_seen_at ? formatDate(p.last_seen_at) : '';
+
+  let html = `<div class="card-box" style="margin-bottom:10px;padding:14px;border-left:3px solid ${color}">`;
+  html += `<div style="font-weight:600;font-size:0.92rem;margin-bottom:6px">${esc(p.title || p.signal_id)}</div>`;
+  html += `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${badges.join('')}</div>`;
+
+  // Exposure / weight bar
+  if (p.exposure_count != null) {
+    const weightPct = Math.round((p.current_weight || 0) * 100);
+    html += `<div style="display:flex;gap:12px;font-size:0.76rem;color:var(--text-muted);margin-bottom:10px">
+      <span>${t('perception.shown', { n: p.exposure_count })}</span>
+      <span>${t('perception.weight', { pct: weightPct })}</span>
+      ${firstSeen ? `<span>${t('perception.first', { when: firstSeen })}</span>` : ''}
+      ${lastSeen ? `<span>${t('perception.last', { when: lastSeen })}</span>` : ''}
+    </div>`;
+  }
+
+  // Resolution info for auto-resolved
+  if (isResolved && p.resolution_reason) {
+    html += `<div style="background:rgba(34,197,94,0.08);border-left:2px solid var(--green);padding:8px 12px;border-radius:var(--radius-sm);font-size:0.82rem;margin-bottom:10px">
+      <div style="font-weight:600;color:var(--green);margin-bottom:2px">${t('perception.llm_resolved')}</div>
+      <div style="color:var(--text-secondary)">${esc(p.resolution_reason)}</div>
+      ${p.resolved_by_memory_id ? `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:4px">${t('perception.triggered_by')} <a onclick="navigate({type:'memory',id:'${esc(p.resolved_by_memory_id)}'})" style="color:var(--accent);cursor:pointer">${esc(p.resolved_by_memory_id)}</a></div>` : ''}
+    </div>`;
+  }
+
+  // Snooze info
+  if (isSnoozed && p.snoozed_until) {
+    html += `<div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:10px">${t('perception.snoozed_until', { when: formatDate(p.snoozed_until) })}</div>`;
+  }
+
+  // Actions
+  html += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
+  if (state === 'active' || state === 'snoozed') {
+    if (!isSnoozed) {
+      html += `<button class="btn-ghost btn-sm" onclick="perceptionAck('${esc(p.signal_id)}')">${t('perception.action.snooze')}</button>`;
+    }
+    html += `<button class="btn-ghost btn-sm" onclick="perceptionDismiss('${esc(p.signal_id)}')">${t('perception.action.dismiss')}</button>`;
+  }
+  if (isResolved || isDismissed) {
+    html += `<button class="btn-ghost btn-sm" onclick="perceptionRestore('${esc(p.signal_id)}')">${t('perception.action.restore')}</button>`;
+  }
+  if (p.source_card_id) {
+    html += `<button class="btn-ghost btn-sm" onclick="navigate({type:'card',id:'${esc(p.source_card_id)}'})">${t('perception.action.jump')}</button>`;
+  }
+  html += '</div>';
+
+  html += '</div>';
+  return html;
+}
+
+async function perceptionAck(signalId) {
+  await api(`/perceptions/${encodeURIComponent(signalId)}/acknowledge`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ snooze_days: 7 }),
+  });
+  await loadSidebarData();
+}
+
+async function perceptionDismiss(signalId) {
+  await api(`/perceptions/${encodeURIComponent(signalId)}/dismiss`, { method: 'POST' });
+  await loadSidebarData();
+}
+
+async function perceptionRestore(signalId) {
+  await api(`/perceptions/${encodeURIComponent(signalId)}/restore`, { method: 'POST' });
+  await loadSidebarData();
+}
+
+async function refreshPerceptions() {
+  await api('/perceptions/refresh', { method: 'POST' });
+  await loadSidebarData();
+}
+
+// ── Skills View ──
+function renderSkillsView(area) {
+  const active = sidebarData.skills.filter(s => s.status === 'active');
+  const archived = sidebarData.skills.filter(s => s.status === 'archived');
+
+  let html = '<h2 style="font-size:1.1rem;margin-bottom:16px">&#9889; Skills</h2>';
+
+  if (active.length === 0 && archived.length === 0) {
+    html += '<div class="empty-state"><div class="icon">&#9889;</div><p>No skills extracted yet. Skills are automatically extracted from repeated patterns in your knowledge cards.</p></div>';
+    area.innerHTML = html; return;
+  }
+
+  if (active.length > 0) {
+    html += '<div class="grid-2" style="margin-bottom:24px">';
+    for (const s of active) { html += renderSkillCard(s); }
+    html += '</div>';
+  }
+
+  if (archived.length > 0) {
+    html += '<details style="margin-top:16px"><summary style="cursor:pointer;color:var(--text-muted);font-size:0.82rem">Archived Skills (' + archived.length + ')</summary>';
+    html += '<div class="grid-2" style="margin-top:12px">';
+    for (const s of archived) { html += renderSkillCard(s); }
+    html += '</div></details>';
+  }
+
+  area.innerHTML = html;
+}
+
+function renderSkillCard(s) {
+  const decay = s.decay_score != null ? s.decay_score : 1.0;
+  const decayPct = Math.round(decay * 100);
+  const decayColor = decay > 0.7 ? 'var(--green)' : decay > 0.4 ? 'var(--yellow)' : 'var(--red)';
+  const pinned = s.pinned ? 1 : 0;
+  const methods = Array.isArray(s.methods) ? s.methods : [];
+  const tags = Array.isArray(s.tags) ? s.tags : [];
+
+  return `<div class="card-box skill-card">
+    <span class="skill-pin${pinned?' pinned':''}" onclick="toggleSkillPin('${esc(s.id)}',${pinned?0:1})" title="${pinned?'Unpin':'Pin'}">${pinned?'&#128204;':'&#128205;'}</span>
+    <a class="skill-export" href="/api/v1/skills/${encodeURIComponent(s.id)}/export?format=skillmd" download title="Export as SKILL.md" style="position:absolute;top:8px;right:36px;font-size:0.85rem;text-decoration:none;color:var(--text-muted);cursor:pointer" onclick="event.stopPropagation()">&#128190;</a>
+    <div class="skill-card-name">${esc(s.name || 'Untitled')}</div>
+    <div class="skill-card-summary">${esc(s.summary || '')}</div>
+    <div class="skill-decay-bar"><div class="skill-decay-fill" style="width:${decayPct}%;background:${decayColor}"></div></div>
+    <div class="skill-meta">
+      <span>Decay: ${decayPct}%</span>
+      <span>Used: ${s.usage_count || 0}x</span>
+      ${s.last_used_at ? `<span>Last: ${formatDate(s.last_used_at)}</span>` : ''}
+    </div>
+    ${methods.length > 0 ? `<div style="margin-top:8px;font-size:0.78rem;color:var(--text-muted)"><strong>Steps:</strong><ol style="margin:4px 0 0 16px">${methods.map(m=>`<li>${esc(typeof m === 'string' ? m : m.description || JSON.stringify(m))}</li>`).join('')}</ol></div>` : ''}
+    ${tags.length > 0 ? `<div style="margin-top:8px;display:flex;gap:4px;flex-wrap:wrap">${tags.map(t=>`<span class="badge badge-tag">${esc(t)}</span>`).join('')}</div>` : ''}
+  </div>`;
+}
+
+async function toggleSkillPin(skillId, pinned) {
+  await api('/skills/' + encodeURIComponent(skillId), {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pinned: !!pinned })
+  });
+  loadSidebarData();
+}
+
+// ── Memories (Data tab) ──
+let memOffset = 0;
+const MEM_PAGE_SIZE = 50;
+
+async function loadMemories() {
+  memOffset = 0;
+  const container = document.getElementById('memory-list');
+  container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const data = await api(`/memories?limit=${MEM_PAGE_SIZE}&offset=0`);
+  if (!data) { container.innerHTML = '<div class="empty-state"><p>Could not load memories.</p></div>'; return; }
+  const items = data.items || [];
+  renderMemories(items, container);
+  memOffset = items.length;
+  // Stats
+  const statsEl = document.getElementById('mem-stats');
+  if (statsEl) statsEl.textContent = t('memories.showing', { shown: items.length, total: data.total ?? '?' });
+  // Load more
+  const moreBtn = document.getElementById('mem-load-more');
+  if (moreBtn) moreBtn.style.display = items.length < (data.total || 0) ? 'block' : 'none';
+  memoriesLoaded = true;
+}
+
+async function loadMoreMemories() {
+  const container = document.getElementById('memory-list');
+  const data = await api(`/memories?limit=${MEM_PAGE_SIZE}&offset=${memOffset}`);
+  if (!data?.items?.length) return;
+  // Append to existing list
+  const items = data.items;
+  for (const m of items) {
+    container.insertAdjacentHTML('beforeend', renderMemoryItem(m));
+  }
+  memOffset += items.length;
+  const statsEl = document.getElementById('mem-stats');
+  if (statsEl) statsEl.textContent = t('memories.showing', { shown: memOffset, total: data.total ?? '?' });
+  const moreBtn = document.getElementById('mem-load-more');
+  if (moreBtn) moreBtn.style.display = memOffset < (data.total || 0) ? 'block' : 'none';
+}
+
+async function searchMemories() {
+  const q = document.getElementById('memory-search').value.trim();
+  if (!q) { loadMemories(); return; }
+  const container = document.getElementById('memory-list');
+  container.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const data = await api('/search?q=' + encodeURIComponent(q) + '&limit=30');
+  if (!data) { container.innerHTML = '<div class="empty-state"><p>Search failed.</p></div>'; return; }
+  document.getElementById('mem-load-more').style.display = 'none';
+  renderMemories(data.items || [], container);
+}
+
+// ── Workspace List View (Code / Docs / Wiki full listing) ──
+async function renderWorkspaceList(area, category) {
+  const icons = { code: '&#128187;', docs: '&#128196;', wiki: '&#128214;' };
+  const titles = { code: 'Code Files', docs: 'Documents', wiki: 'Wiki Pages' };
+  const navTypes = { code: 'ws_file', docs: 'ws_doc', wiki: 'wiki_page' };
+
+  // Fetch full list with higher limit
+  const data = await api(`/scan/files?category=${category}&limit=2000`);
+  const files = data?.files || [];
+
+  let html = `<div class="back-link" onclick="navigate({type:'overview'})">&larr; Back</div>`;
+  html += `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+    <h2 style="font-size:1.1rem;font-weight:600;display:flex;align-items:center;gap:8px">
+      <span>${icons[category] || ''}</span> ${titles[category] || category}
+      <span class="badge badge-cat">${files.length}</span>
+    </h2>
+    <input id="ws-list-filter" type="text" placeholder="Filter..." oninput="wsListFilter()" style="background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;color:var(--text-primary);font-size:0.82rem;width:200px;outline:none">
+  </div>`;
+
+  html += '<div id="ws-list-items">';
+  html += wsListRenderItems(files, category, navTypes[category]);
+  html += '</div>';
+
+  area.innerHTML = html;
+
+  // Store data for filtering
+  window._wsListData = { files, category, navType: navTypes[category] };
+}
+
+function wsListFilter() {
+  const filter = (document.getElementById('ws-list-filter')?.value || '').toLowerCase();
+  const { files, category, navType } = window._wsListData || {};
+  if (!files) return;
+  const filtered = filter
+    ? files.filter(f => ((f.relativePath || f.title || '') + ' ' + (f.id || '')).toLowerCase().includes(filter))
+    : files;
+  document.getElementById('ws-list-items').innerHTML = wsListRenderItems(filtered, category, navType);
+}
+
+function wsListRenderItems(files, category, navType) {
+  if (files.length === 0) return '<div class="empty-state"><p>No items match your filter.</p></div>';
+
+  if (category === 'wiki') {
+    // Group wiki by module/concept
+    const modules = files.filter(f => f.id?.startsWith('wiki:modules/'));
+    const concepts = files.filter(f => f.id?.startsWith('wiki:concepts/'));
+    let html = '';
+    if (modules.length > 0) {
+      html += `<h3 style="font-size:0.88rem;font-weight:600;margin:12px 0 8px;color:var(--text-secondary)">&#128211; Modules (${modules.length})</h3>`;
+      html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:16px">';
+      for (const f of modules) {
+        html += `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);cursor:pointer;transition:background 150ms" onmouseenter="this.style.background='var(--bg-hover)'" onmouseleave="this.style.background=''" onclick="navigate({type:'${navType}',id:'${escJs(f.id)}'})">
+          <span style="color:var(--blue);font-size:0.85rem">&#128211;</span>
+          <span style="flex:1;font-size:0.85rem">${esc(f.title || f.id)}</span>
+        </div>`;
+      }
+      html += '</div>';
+    }
+    if (concepts.length > 0) {
+      html += `<h3 style="font-size:0.88rem;font-weight:600;margin:12px 0 8px;color:var(--text-secondary)">&#128215; Concepts (${concepts.length})</h3>`;
+      html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">';
+      for (const f of concepts) {
+        html += `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);cursor:pointer;transition:background 150ms" onmouseenter="this.style.background='var(--bg-hover)'" onmouseleave="this.style.background=''" onclick="navigate({type:'${navType}',id:'${escJs(f.id)}'})">
+          <span style="color:var(--purple);font-size:0.85rem">&#128215;</span>
+          <span style="flex:1;font-size:0.85rem">${esc(f.title || f.id)}</span>
+        </div>`;
+      }
+      html += '</div>';
+    }
+    return html;
+  }
+
+  // Code and Docs: group by directory
+  const dirs = {};
+  for (const f of files) {
+    const rel = f.relativePath || f.title || '';
+    const parts = rel.split('/');
+    const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : '(root)';
+    if (!dirs[dir]) dirs[dir] = [];
+    dirs[dir].push(f);
+  }
+
+  let html = '';
+  const sortedDirs = Object.entries(dirs).sort(([a],[b]) => a.localeCompare(b));
+  for (const [dir, dirFiles] of sortedDirs) {
+    html += `<div style="margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:6px;padding:6px 0;font-size:0.82rem;font-weight:600;color:var(--text-secondary)">
+        <span>&#128193;</span> ${esc(dir)} <span class="badge badge-cat">${dirFiles.length}</span>
+      </div>
+      <div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">`;
+    for (const f of dirFiles) {
+      const fileName = (f.relativePath || f.title).split('/').pop();
+      const sizeStr = f.size ? (f.size < 1024 ? f.size + ' B' : (f.size / 1024).toFixed(1) + ' KB') : '';
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);cursor:pointer;font-size:0.82rem;transition:background 150ms" onmouseenter="this.style.background='var(--bg-hover)'" onmouseleave="this.style.background=''" onclick="navigate({type:'${navType}',id:'${escJs(f.id)}'})">
+        <span style="width:6px;height:6px;border-radius:50%;background:${category === 'code' ? 'var(--cyan)' : 'var(--yellow)'};flex-shrink:0"></span>
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(fileName)}</span>
+        ${sizeStr ? `<span style="font-size:0.72rem;color:var(--text-muted)">${sizeStr}</span>` : ''}
+      </div>`;
+    }
+    html += '</div></div>';
+  }
+  return html;
+}
+
+// ── Workspace File Detail ──
+async function renderWorkspaceFile(area, fileId) {
+  const data = await api('/scan/file/' + encodeURIComponent(fileId));
+  if (!data || data.error) { area.innerHTML = `<div class="empty-state"><p>${esc(data?.error || 'File not found')}</p></div>`; return; }
+
+  const meta = typeof data.metadata === 'string' ? JSON.parse(data.metadata || '{}') : (data.metadata || {});
+  const edges = data.edges || [];
+  const symbols = edges.filter(e => e.type === 'contains');
+  const imports = edges.filter(e => e.type === 'import');
+  const docRefs = edges.filter(e => e.type === 'doc_reference');
+  const similars = edges.filter(e => e.type === 'similarity').sort((a, b) => (b.weight || 0) - (a.weight || 0));
+  const relPath = meta.relativePath || data.title || '';
+  const lang = meta.language || meta.category || '';
+  const size = meta.size ? (meta.size < 1024 ? meta.size + ' B' : (meta.size / 1024).toFixed(1) + ' KB') : '';
+
+  let html = `<div class="back-link" onclick="navigate({type:'overview'})">&larr; Back</div>`;
+  html += `<div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:20px">
+    <h2 style="font-size:1.1rem;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:8px">
+      <span style="color:var(--cyan)">&#128187;</span> ${esc(data.title)}
+    </h2>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${lang ? `<span class="badge badge-cat">${esc(lang)}</span>` : ''}
+      ${size ? `<span class="badge badge-cat">${size}</span>` : ''}
+      <span class="badge badge-cat" style="font-family:monospace;font-size:0.72rem">${esc(relPath)}</span>
+    </div>
+  </div>`;
+
+  // Symbols
+  if (symbols.length > 0) {
+    html += `<h3 style="font-size:0.9rem;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:6px">
+      <span style="color:var(--purple)">&#9670;</span> Symbols <span class="badge badge-cat">${symbols.length}</span>
+    </h3>`;
+    html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:20px">';
+    for (const e of symbols.slice(0, 40)) {
+      const parts = e.to.split(':');
+      const name = parts.length >= 3 ? parts[2] : e.to;
+      const line = parts.length >= 4 ? parts[3] : '';
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);font-size:0.82rem">
+        <span style="color:var(--purple);font-family:monospace;font-size:0.75rem;width:20px">fn</span>
+        <span style="flex:1;font-family:monospace;color:var(--text-primary)">${esc(name)}</span>
+        ${line ? `<span style="font-size:0.7rem;color:var(--text-muted)">:${line}</span>` : ''}
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  // Dependencies
+  if (imports.length > 0) {
+    html += `<h3 style="font-size:0.9rem;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:6px">
+      <span style="color:var(--green)">&#8594;</span> Dependencies <span class="badge badge-cat">${imports.length}</span>
+    </h3>`;
+    html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:20px">';
+    for (const e of imports.slice(0, 30)) {
+      const target = e.to.replace(/^file:/, '');
+      const isExt = !target.includes('/') || target.startsWith('node_modules');
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);font-size:0.82rem;cursor:${isExt ? 'default' : 'pointer'}"
+        ${!isExt ? `onclick="navigate({type:'ws_file',id:'${escJs(e.to)}'})"` : ''}>
+        <span style="color:${isExt ? 'var(--text-muted)' : 'var(--green)'};font-size:0.75rem">&#128279;</span>
+        <span style="flex:1;font-family:monospace;font-size:0.78rem;color:${isExt ? 'var(--text-muted)' : 'var(--text-primary)'}">${esc(target)}</span>
+        ${isExt ? '<span style="font-size:0.7rem;color:var(--text-muted);font-style:italic">external</span>' : ''}
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  // Doc references
+  if (docRefs.length > 0) {
+    html += `<h3 style="font-size:0.9rem;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:6px">
+      <span style="color:var(--yellow)">&#128196;</span> Doc References <span class="badge badge-cat">${docRefs.length}</span>
+    </h3>`;
+    html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:20px">';
+    for (const e of docRefs.slice(0, 20)) {
+      const target = (e.from === fileId ? e.to : e.from).replace(/^file:/, '');
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);font-size:0.82rem;cursor:pointer"
+        onclick="navigate({type:'ws_doc',id:'${escJs(e.from === fileId ? e.to : e.from)}'})">
+        <span style="color:var(--yellow);font-size:0.75rem">&#128196;</span>
+        <span style="flex:1;font-family:monospace;font-size:0.78rem">${esc(target)}</span>
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  // Similar files (via vector similarity)
+  if (similars.length > 0) {
+    html += `<h3 style="font-size:0.9rem;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:6px">
+      <span style="color:var(--cyan)">&#10038;</span> Similar Files <span class="badge badge-cat">${similars.length}</span>
+    </h3>`;
+    html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:20px">';
+    for (const e of similars.slice(0, 12)) {
+      const target = (e.from === fileId ? e.to : e.from);
+      const targetLabel = target.replace(/^(file|wiki|doc|sym):/, '');
+      const prefix = target.split(':')[0];
+      const navType = prefix === 'wiki' ? 'ws_wiki' : prefix === 'sym' ? 'ws_file' : (prefix === 'doc' ? 'ws_doc' : 'ws_file');
+      const score = e.weight ? (e.weight * 100).toFixed(0) + '%' : '';
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);font-size:0.82rem;cursor:pointer"
+        onclick="navigate({type:'${navType}',id:'${escJs(target)}'})">
+        <span style="color:var(--cyan);font-size:0.75rem">&#10038;</span>
+        <span style="flex:1;font-family:monospace;font-size:0.78rem">${esc(targetLabel)}</span>
+        ${score ? `<span style="font-size:0.7rem;color:var(--text-muted);font-family:monospace">${score}</span>` : ''}
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  // Related knowledge cards (match by filename)
+  const fileName = relPath.split('/').pop()?.toLowerCase() || '';
+  if (fileName.length > 3) {
+    const related = sidebarData.knowledgeCards.filter(c =>
+      (c.summary || '').toLowerCase().includes(fileName) || (c.title || '').toLowerCase().includes(fileName)
+    ).slice(0, 8);
+    if (related.length > 0) {
+      html += `<h3 style="font-size:0.9rem;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:6px">
+        <span>&#129504;</span> Related Knowledge <span class="badge badge-cat">${related.length}</span>
+      </h3>`;
+      html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:20px">';
+      for (const c of related) {
+        html += `<div style="display:flex;align-items:flex-start;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);cursor:pointer"
+          onclick="navigate({type:'card',id:'${escJs(c.id)}'})">
+          <span class="badge badge-${c.category}" style="margin-top:2px;font-size:0.68rem">${esc(c.category)}</span>
+          <div style="min-width:0">
+            <div style="font-size:0.82rem;font-weight:500">${esc(c.title)}</div>
+            <div style="font-size:0.75rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((c.summary || '').substring(0, 120))}</div>
+          </div>
+        </div>`;
+      }
+      html += '</div>';
+    }
+  }
+
+  // File content preview — show source code for files without rich structural data
+  if (data.content) {
+    const hasStructure = symbols.length > 0 || imports.length > 0 || docRefs.length > 0;
+    html += `<h3 style="font-size:0.9rem;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:6px">
+      <span style="color:var(--text-muted)">&#128196;</span> ${hasStructure ? 'Source Preview' : 'File Content'}
+    </h3>`;
+    const preview = data.content.length > 3000 ? data.content.substring(0, 3000) + '\n\n... (truncated)' : data.content;
+    html += `<pre style="border:1px solid var(--border);border-radius:var(--radius);padding:14px;background:var(--bg-secondary);overflow-x:auto;font-size:0.78rem;line-height:1.5;color:var(--text-secondary);max-height:500px;overflow-y:auto;white-space:pre-wrap;word-break:break-all">${esc(preview)}</pre>`;
+  }
+
+  area.innerHTML = html;
+}
+
+// ── Workspace Doc Detail ──
+async function renderWorkspaceDoc(area, docId) {
+  const data = await api('/scan/file/' + encodeURIComponent(docId));
+  if (!data || data.error) { area.innerHTML = `<div class="empty-state"><p>${esc(data?.error || 'Document not found')}</p></div>`; return; }
+
+  const meta = typeof data.metadata === 'string' ? JSON.parse(data.metadata || '{}') : (data.metadata || {});
+  const relPath = meta.relativePath || data.title || '';
+
+  let html = `<div class="back-link" onclick="navigate({type:'overview'})">&larr; Back</div>`;
+  html += `<div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:20px">
+    <h2 style="font-size:1.1rem;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:8px">
+      <span style="color:var(--yellow)">&#128196;</span> ${esc(data.title)}
+    </h2>
+    <span style="font-size:0.78rem;color:var(--text-muted);font-family:monospace">${esc(relPath)}</span>
+  </div>`;
+
+  if (data.content) {
+    html += `<article class="markdown-body" style="border:1px solid var(--border);border-radius:var(--radius);padding:20px;background:var(--bg-secondary)">${renderMd(data.content)}</article>`;
+  } else {
+    html += '<div class="empty-state"><p>No content available for this document.</p></div>';
+  }
+
+  // Similar documents (via vector similarity)
+  const docEdges = data.edges || [];
+  const docSimilars = docEdges.filter(e => e.type === 'similarity').sort((a, b) => (b.weight || 0) - (a.weight || 0));
+  if (docSimilars.length > 0) {
+    html += `<h3 style="font-size:0.9rem;font-weight:600;margin:20px 0 8px;display:flex;align-items:center;gap:6px">
+      <span style="color:var(--cyan)">&#10038;</span> Similar Documents <span class="badge badge-cat">${docSimilars.length}</span>
+    </h3>`;
+    html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">';
+    for (const e of docSimilars.slice(0, 12)) {
+      const target = e.from === docId ? e.to : e.from;
+      const targetLabel = target.replace(/^(file|doc):/, '');
+      const score = e.weight ? (e.weight * 100).toFixed(0) + '%' : '';
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);font-size:0.82rem;cursor:pointer"
+        onclick="navigate({type:'ws_doc',id:'${escJs(target)}'})">
+        <span style="color:var(--yellow);font-size:0.75rem">&#128196;</span>
+        <span style="flex:1;font-family:monospace;font-size:0.78rem">${esc(targetLabel)}</span>
+        ${score ? `<span style="font-size:0.7rem;color:var(--text-muted);font-family:monospace">${score}</span>` : ''}
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  // Doc references
+  const docRefs = docEdges.filter(e => e.type === 'doc_reference');
+  if (docRefs.length > 0) {
+    html += `<h3 style="font-size:0.9rem;font-weight:600;margin:20px 0 8px;display:flex;align-items:center;gap:6px">
+      <span style="color:var(--green)">&#128279;</span> References <span class="badge badge-cat">${docRefs.length}</span>
+    </h3>`;
+    html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">';
+    for (const e of docRefs.slice(0, 20)) {
+      const target = (e.from === docId ? e.to : e.from);
+      const targetLabel = target.replace(/^(file|doc|wiki):/, '');
+      const prefix = target.split(':')[0];
+      const navType = prefix === 'wiki' ? 'wiki_page' : prefix === 'doc' ? 'ws_doc' : 'ws_file';
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);font-size:0.82rem;cursor:pointer"
+        onclick="navigate({type:'${navType}',id:'${escJs(target)}'})">
+        <span style="color:var(--green);font-size:0.75rem">&#128279;</span>
+        <span style="flex:1;font-family:monospace;font-size:0.78rem">${esc(targetLabel)}</span>
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  area.innerHTML = html;
+}
+
+// ── Wiki Page Detail ──
+/** Render wiki page content with clickable links for cards, files, and dependencies */
+function renderWikiContent(content, isModule, pageId) {
+  const lines = content.split('\n');
+  let html = '<div style="border:1px solid var(--border);border-radius:var(--radius);padding:20px;background:var(--bg-secondary)">';
+
+  // Build a lookup of knowledge cards by title for linking
+  const cardsByTitle = {};
+  for (const c of (sidebarData.knowledgeCards || [])) {
+    if (c.title) cardsByTitle[c.title.toLowerCase()] = c;
+  }
+
+  let inSection = null; // 'files', 'knowledge', 'deps', 'exports', null
+  let currentFileHeading = null;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    // Skip the main H1 title (already shown in header)
+    if (/^# /.test(trimmed) && !inSection) continue;
+
+    // Blockquote summary line
+    if (/^> /.test(trimmed)) {
+      html += `<div style="color:var(--text-muted);font-size:0.85rem;margin-bottom:16px;padding:8px 12px;border-left:3px solid var(--border);background:var(--bg-tertiary);border-radius:0 var(--radius-sm) var(--radius-sm) 0">${esc(trimmed.replace(/^>\s*/, '').replace(/\*\*/g, ''))}</div>`;
+      continue;
+    }
+
+    // H2 section headers
+    if (/^## /.test(trimmed)) {
+      const title = trimmed.replace(/^##\s*/, '');
+      if (/related knowledge/i.test(title)) inSection = 'knowledge';
+      else if (/files/i.test(title)) inSection = 'files';
+      else inSection = null;
+      html += `<h3 style="font-size:0.95rem;font-weight:600;margin:20px 0 10px;border-bottom:1px solid var(--border);padding-bottom:6px">${esc(title)}</h3>`;
+      continue;
+    }
+
+    // H3 file headings inside module pages (### cloud-sync.mjs)
+    if (/^### /.test(trimmed)) {
+      currentFileHeading = trimmed.replace(/^###\s*/, '');
+      // Try to find the file's full path
+      const wsFiles = sidebarData.wsCode || [];
+      const match = wsFiles.find(f => (f.relativePath || f.title || '').endsWith('/' + currentFileHeading) || f.title === currentFileHeading);
+      if (match) {
+        html += `<h4 style="font-size:0.88rem;font-weight:600;margin:16px 0 6px;cursor:pointer;color:var(--accent)" onclick="navigate({type:'ws_file',id:'${escJs(match.id)}'})">${esc(currentFileHeading)} &#8599;</h4>`;
+      } else {
+        html += `<h4 style="font-size:0.88rem;font-weight:600;margin:16px 0 6px">${esc(currentFileHeading)}</h4>`;
+      }
+      continue;
+    }
+
+    // Bold text sections (**Exports:** or **Dependencies (import):**)
+    if (/^\*\*/.test(trimmed)) {
+      const label = trimmed.replace(/\*\*/g, '');
+      if (/export/i.test(label)) inSection = 'exports';
+      else if (/dependenc/i.test(label)) inSection = 'deps';
+      else inSection = null;
+      html += `<div style="font-size:0.82rem;font-weight:600;color:var(--text-secondary);margin:8px 0 4px">${esc(label)}</div>`;
+      continue;
+    }
+
+    // List items: - `functionName` (function/class) or - path/to/file.mjs
+    if (/^[-*] /.test(trimmed)) {
+      const itemText = trimmed.replace(/^[-*]\s*/, '');
+
+      // Concept page: knowledge card reference (bold title — tags: ...)
+      if (inSection === 'knowledge') {
+        const cardMatch = itemText.match(/^\*\*(.+?)\*\*\s*—?\s*tags?:\s*(.*)/);
+        if (cardMatch) {
+          const cardTitle = cardMatch[1];
+          const tags = cardMatch[2];
+          const card = cardsByTitle[cardTitle.toLowerCase()];
+          if (card) {
+            html += `<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;cursor:pointer" onclick="navigate({type:'card',id:'${escJs(card.id)}'})">
+              <span style="color:var(--accent);margin-top:2px">&#128203;</span>
+              <div><div style="font-size:0.85rem;color:var(--accent)">${esc(cardTitle)}</div>
+              <div style="font-size:0.72rem;color:var(--text-muted)">${esc(tags)}</div></div>
+            </div>`;
+          } else {
+            html += `<div style="padding:4px 0;font-size:0.85rem">&#128203; <strong>${esc(cardTitle)}</strong> <span style="color:var(--text-muted);font-size:0.72rem">${esc(tags)}</span></div>`;
+          }
+          continue;
+        }
+      }
+
+      // Module page: export symbols
+      if (inSection === 'exports') {
+        const symMatch = itemText.match(/`(.+?)`\s*\((\w+)\)/);
+        if (symMatch) {
+          html += `<div style="padding:2px 0 2px 12px;font-size:0.82rem;font-family:monospace">
+            <span style="color:var(--purple);font-size:0.75rem;margin-right:4px">${symMatch[2] === 'class' ? 'cls' : 'fn'}</span>
+            <span style="color:var(--text-primary)">${esc(symMatch[1])}</span>
+            <span style="color:var(--text-muted);font-size:0.72rem;margin-left:4px">(${esc(symMatch[2])})</span>
+          </div>`;
+          continue;
+        }
+      }
+
+      // Module page: dependency file paths
+      if (inSection === 'deps') {
+        const depPath = itemText.replace(/`/g, '').trim();
+        if (depPath.includes('/')) {
+          const wsFiles = sidebarData.wsCode || [];
+          const match = wsFiles.find(f => (f.relativePath || '') === depPath);
+          if (match) {
+            html += `<div style="padding:2px 0 2px 12px;font-size:0.82rem;cursor:pointer" onclick="navigate({type:'ws_file',id:'${escJs(match.id)}'})">
+              <span style="color:var(--green);margin-right:4px">&#8594;</span>
+              <span style="font-family:monospace;color:var(--accent)">${esc(depPath)}</span>
+            </div>`;
+          } else {
+            html += `<div style="padding:2px 0 2px 12px;font-size:0.82rem;font-family:monospace;color:var(--text-muted)">&#8594; ${esc(depPath)}</div>`;
+          }
+          continue;
+        }
+      }
+
+      // Default list item
+      html += `<div style="padding:2px 0 2px 12px;font-size:0.85rem">&#8226; ${esc(itemText)}</div>`;
+      continue;
+    }
+
+    // Empty lines → spacing
+    if (!trimmed) {
+      html += '<div style="height:6px"></div>';
+      continue;
+    }
+
+    // Regular text
+    html += `<div style="font-size:0.85rem;color:var(--text-secondary)">${esc(trimmed)}</div>`;
+  }
+
+  html += '</div>';
+  return html;
+}
+
+async function renderWikiPage(area, pageId) {
+  const data = await api('/scan/file/' + encodeURIComponent(pageId));
+  if (!data || data.error) { area.innerHTML = `<div class="empty-state"><p>${esc(data?.error || 'Wiki page not found')}</p></div>`; return; }
+
+  const isModule = pageId.includes('modules/');
+  let html = `<div class="back-link" onclick="navigate({type:'overview'})">&larr; Back</div>`;
+  html += `<div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:20px">
+    <h2 style="font-size:1.1rem;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:8px">
+      <span style="font-size:1.1rem">${isModule ? '&#128211;' : '&#128215;'}</span> ${esc(data.title || pageId)}
+    </h2>
+    <span style="font-size:0.78rem;color:var(--text-muted)">${isModule ? 'Module Page' : 'Concept Page'}</span>
+  </div>`;
+
+  if (data.content) {
+    // Parse wiki content into structured clickable sections instead of plain markdown
+    html += renderWikiContent(data.content, isModule, pageId);
+  } else {
+    html += '<div class="empty-state"><p>No wiki content generated yet. Run a scan to generate wiki pages.</p></div>';
+  }
+
+  // Member files from edges
+  const edges = data.edges || [];
+  const memberEdges = edges.filter(e => e.type === 'contains' || e.type === 'import');
+  if (memberEdges.length > 0) {
+    html += `<h3 style="font-size:0.9rem;font-weight:600;margin:20px 0 8px;display:flex;align-items:center;gap:6px">
+      <span style="color:var(--cyan)">&#128187;</span> Files <span class="badge badge-cat">${memberEdges.length}</span>
+    </h3>`;
+    html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">';
+    for (const e of memberEdges.slice(0, 30)) {
+      const target = (e.from === pageId ? e.to : e.from).replace(/^file:/, '');
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);font-size:0.82rem;cursor:pointer"
+        onclick="navigate({type:'ws_file',id:'${escJs(e.from === pageId ? e.to : e.from)}'})">
+        <span style="color:var(--cyan);font-size:0.75rem">&#128187;</span>
+        <span style="flex:1;font-family:monospace;font-size:0.78rem">${esc(target)}</span>
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  // Similar wiki pages (via vector similarity)
+  const wikiSimilars = edges.filter(e => e.type === 'similarity').sort((a, b) => (b.weight || 0) - (a.weight || 0));
+  if (wikiSimilars.length > 0) {
+    html += `<h3 style="font-size:0.9rem;font-weight:600;margin:20px 0 8px;display:flex;align-items:center;gap:6px">
+      <span style="color:var(--cyan)">&#10038;</span> Similar Pages <span class="badge badge-cat">${wikiSimilars.length}</span>
+    </h3>`;
+    html += '<div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">';
+    for (const e of wikiSimilars.slice(0, 12)) {
+      const target = e.from === pageId ? e.to : e.from;
+      const targetLabel = target.replace(/^wiki:(modules|concepts)\//, '');
+      const isConcept = target.includes('concepts/');
+      const score = e.weight ? (e.weight * 100).toFixed(0) + '%' : '';
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);font-size:0.82rem;cursor:pointer"
+        onclick="navigate({type:'wiki_page',id:'${escJs(target)}'})">
+        <span style="font-size:0.75rem">${isConcept ? '&#128215;' : '&#128211;'}</span>
+        <span style="flex:1;font-size:0.82rem">${esc(targetLabel)}</span>
+        ${score ? `<span style="font-size:0.7rem;color:var(--text-muted);font-family:monospace">${score}</span>` : ''}
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  area.innerHTML = html;
+}
+
+function renderMemoryItem(m) {
+  const raw = m.content || m.fts_content || m.summary || '';
+  let title = m.title;
+  if (!title || title === 'null') {
+    const firstLine = raw.split('\n').find(l => l.trim()) || '';
+    title = firstLine.length > 100 ? firstLine.substring(0, 97) + '...' : firstLine;
+  }
+  title = title || 'Untitled';
+  const tags = parseTags(m.tags).map(t => `<span class="badge badge-tag">${esc(t)}</span>`).join('');
+  const typeLabel = m.type || m.category || 'memory';
+  const sourceLabel = m.source ? `<span class="badge badge-tag" style="border-color:var(--accent);color:var(--accent)">${esc(m.source)}</span>` : '';
+
+  return `<div class="card-box" style="margin-bottom:8px;cursor:pointer;padding:14px;border-left:3px solid ${typeLabel === 'session_summary' ? 'var(--accent)' : typeLabel === 'code_change' ? 'var(--orange)' : typeLabel === 'turn_summary' ? 'var(--green)' : 'var(--border)'}" onclick="this.querySelector('.mem-body').style.display=this.querySelector('.mem-body').style.display==='block'?'none':'block'">
+    <div style="display:flex;align-items:center;gap:8px">
+      <span class="badge badge-cat">${esc(typeLabel)}</span>
+      ${sourceLabel}
+      <span style="font-weight:500;font-size:0.85rem;flex:1;min-width:0">${esc(title)}</span>
+      <span style="font-size:0.76rem;color:var(--text-muted);white-space:nowrap">${formatDate(m.created_at)}</span>
+    </div>
+    ${tags ? `<div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">${tags}</div>` : ''}
+    <div class="mem-body card-detail-body" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:0.82rem">${renderMd(raw)}</div>
+  </div>`;
+}
+
+function renderMemories(items, container) {
+  if (items.length === 0) { container.innerHTML = '<div class="empty-state"><div class="icon">&#128466;</div><p>No memories found.</p></div>'; return; }
+  container.innerHTML = items.map(renderMemoryItem).join('');
+}
+
+document.getElementById('memory-search').addEventListener('keydown', function(e) { if (e.key === 'Enter') searchMemories(); });
+
+// ── Sync Panel ──
+async function renderSyncPanel() {
+  const container = document.getElementById('sync-panel-inner');
+  const [data, recent] = await Promise.all([api('/sync/status'), api('/sync/recent')]);
+
+  let html = `<h2 style="font-size:1.1rem;margin-bottom:20px">&#9729; ${t('sync.title')}</h2>`;
+
+  // Connection status card
+  html += '<div class="sync-status-box" style="border-radius:var(--radius)">';
+  if (data && data.cloud_enabled) {
+    html += '<div class="sync-icon connected" style="font-size:1.4rem">&#9889;</div>';
+    html += `<div class="sync-info" style="flex:1"><h3 style="color:var(--green)">${t('sync.connected')}</h3><p>${t('sync.memory_label')} <strong>${esc(data.memory_name || data.memory_id?.substring(0, 12) || 'N/A')}</strong></p>`;
+    if (data.last_push_at) html += `<p style="font-size:0.78rem;margin-top:2px">${t('sync.last_sync', { when: formatDate(data.last_push_at) })}</p>`;
+    html += '</div>';
+    html += `<button class="btn-ghost btn-sm" onclick="disconnectCloud()">${t('sync.disconnect')}</button>`;
+  } else {
+    html += '<div class="sync-icon disconnected" style="font-size:1.4rem">&#9729;</div>';
+    html += `<div class="sync-info" style="flex:1"><h3>${t('sync.not_connected')}</h3><p>${t('sync.connect_description')}</p></div>`;
+    html += `<button class="btn" onclick="document.getElementById('connect-flow').classList.toggle('visible')">${t('sync.connect')}</button>`;
+  }
+  html += '</div>';
+
+  // Auth flow (hidden by default)
+  html += `<div class="connect-instructions" id="connect-flow">
+    <div id="auth-flow">
+      <p style="color:var(--text-secondary);margin-bottom:12px">One click to connect. No manual setup needed.</p>
+      <button class="btn" style="width:100%" onclick="startDeviceAuth()">Start Connection</button>
+    </div>
+    <div id="auth-pending" style="display:none;text-align:center">
+      <p style="color:var(--text-secondary)">Open this link and enter the code:</p>
+      <div style="font-size:2em;font-weight:700;letter-spacing:4px;color:var(--accent);margin:12px 0" id="auth-code">---</div>
+      <a id="auth-link" href="#" target="_blank" style="color:var(--accent-hover)">Loading...</a>
+      <p style="color:var(--text-muted);margin-top:12px;font-size:0.82rem">Waiting... <span class="spinner" style="width:14px;height:14px;display:inline-block;vertical-align:middle"></span></p>
+    </div>
+    <div id="auth-select" style="display:none">
+      <p style="color:var(--text-secondary);margin-bottom:8px">Select a memory:</p>
+      <select id="auth-memory-select" style="width:100%;padding:8px;background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:10px"></select>
+      <button class="btn" style="width:100%" onclick="confirmMemory()">Connect</button>
+    </div>
+    <div id="auth-done" style="display:none;text-align:center">
+      <div style="font-size:2em;margin:8px 0;color:var(--green)">&#10003;</div>
+      <p style="color:var(--green)">Connected! Sync will start automatically.</p>
+    </div>
+  </div>`;
+
+  // Sync capabilities overview
+  if (data?.cloud_enabled) {
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin:20px 0">';
+    html += syncCapCard(t('sync.cap.memories'), '&#128466;', true, t('sync.cap.push'));
+    html += syncCapCard(t('sync.cap.cards'), '&#128218;', true, t('sync.cap.push_pull'));
+    html += syncCapCard(t('sync.cap.tasks'), '&#9745;', true, t('sync.cap.push'));
+    html += syncCapCard(t('sync.cap.risks'), '&#9888;', true, t('sync.cap.pull'));
+    const skillsInfo = recent?.skills_sync;
+    html += syncCapCard(t('sync.cap.skills'), '&#9889;', true, `${t('stats.skills_count', { n: skillsInfo?.local_count || 0 })} &middot; ${t('sync.cap.push_pull')}`);
+    html += syncCapCard(t('sync.cap.topics'), '&#128209;', true, t('sync.cap.via_card'));
+    html += '</div>';
+  }
+
+  // Recently synced content
+  if (recent && data?.cloud_enabled) {
+    html += '<div style="margin-top:24px">';
+
+    // Pushed memories
+    const pushedMem = recent.pushed_memories || [];
+    if (pushedMem.length > 0) {
+      html += `<div class="section-gap"><div class="section-title">${t('sync.recent_push_mem')}</div>`;
+      for (const m of pushedMem) {
+        html += `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);font-size:0.82rem">
+          <span class="badge badge-cat">${esc(m.type || 'memory')}</span>
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.title || t('common.untitled'))}</span>
+          <span style="color:var(--text-muted);font-size:0.75rem;white-space:nowrap">${formatDate(m.last_pushed_at)}</span>
+        </div>`;
+      }
+      html += '</div>';
+    }
+
+    // Pushed cards
+    const pushedCards = recent.pushed_cards || [];
+    if (pushedCards.length > 0) {
+      html += `<div class="section-gap"><div class="section-title">${t('sync.recent_push_cards')}</div>`;
+      for (const c of pushedCards) {
+        html += `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);font-size:0.82rem">
+          ${catBadge(c.category || 'insight')}
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.title || t('common.untitled'))}</span>
+          <span style="color:var(--text-muted);font-size:0.75rem;white-space:nowrap">${formatDate(c.last_pushed_at)}</span>
+        </div>`;
+      }
+      html += '</div>';
+    }
+
+    // Pulled cards
+    const pulledCards = recent.pulled_cards || [];
+    if (pulledCards.length > 0) {
+      html += `<div class="section-gap"><div class="section-title">${t('sync.recent_pull')}</div>`;
+      for (const c of pulledCards) {
+        const typeIcon = c.card_type === 'moc' ? '&#128209;' : '&#128218;';
+        html += `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);font-size:0.82rem">
+          <span>${typeIcon}</span>
+          ${catBadge(c.category || 'insight')}
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.title || t('common.untitled'))}</span>
+          <span style="color:var(--text-muted);font-size:0.75rem;white-space:nowrap">${formatDate(c.last_pulled_at)}</span>
+        </div>`;
+      }
+      html += '</div>';
+    }
+
+    if (pushedMem.length === 0 && pushedCards.length === 0 && pulledCards.length === 0) {
+      html += `<div style="text-align:center;padding:24px;color:var(--text-muted);font-size:0.85rem">${t('sync.recent_empty')}</div>`;
+    }
+
+    html += '</div>';
+  }
+
+  // Sync event log (compact)
+  if (data?.history?.length > 0) {
+    html += `<details style="margin-top:20px"><summary style="cursor:pointer;font-size:0.85rem;font-weight:600;color:var(--text-secondary);margin-bottom:8px">${t('sync.history', { n: data.history.length })}</summary>`;
+    for (const item of data.history) {
+      const dir = item.details?.direction || 'push';
+      const icon = dir === 'pull' ? '&#11015;' : '&#11014;';
+      html += `<div style="display:flex;align-items:center;gap:8px;padding:5px 8px;font-size:0.78rem;color:var(--text-muted);border-bottom:1px solid var(--border)">
+        <span>${icon}</span>
+        <span style="min-width:70px;font-weight:500;color:var(--text-secondary)">${esc(item.type||'memories')}</span>
+        <span>${item.details?.count || 0} ${dir}</span>
+        <span style="margin-left:auto;font-size:0.72rem">${formatDate(item.timestamp)}</span>
+      </div>`;
+    }
+    html += '</details>';
+  }
+
+  container.innerHTML = html;
+}
+
+function syncCapCard(label, icon, supported, detail) {
+  const borderColor = supported ? 'var(--green)' : 'var(--border)';
+  const statusDot = supported ? '<span style="color:var(--green)">&#9679;</span>' : '<span style="color:var(--text-muted)">&#9675;</span>';
+  return `<div class="card-box" style="padding:12px;border-left:3px solid ${borderColor}">
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+      <span style="font-size:1rem">${icon}</span>
+      <span style="font-weight:600;font-size:0.85rem">${esc(label)}</span>
+      ${statusDot}
+    </div>
+    <div style="font-size:0.75rem;color:var(--text-muted)">${detail}</div>
+  </div>`;
+}
+
+let _authApiKey = null;
+async function startDeviceAuth() {
+  document.getElementById('auth-flow').style.display = 'none';
+  document.getElementById('auth-pending').style.display = 'block';
+  try {
+    const data = await api('/cloud/auth/start', { method: 'POST' });
+    if (!data?.user_code) throw new Error('Failed to start auth');
+    document.getElementById('auth-code').textContent = data.user_code;
+    const link = document.getElementById('auth-link');
+    const uiReadyUrl = data.verification_url || (data.user_code ? `${data.verification_uri}?code=${encodeURIComponent(data.user_code)}` : data.verification_uri);
+    const safeUrl = /^https?:\/\//i.test(String(uiReadyUrl || '')) ? String(uiReadyUrl) : 'about:blank';
+    link.href = safeUrl;
+    link.textContent = safeUrl;
+    api('/cloud/auth/open-browser', { method: 'POST', body: JSON.stringify({ url: safeUrl }) }).catch(() => {
+      if (safeUrl !== 'about:blank') window.open(safeUrl, '_blank');
+    });
+    const result = await api('/cloud/auth/poll', { method: 'POST', body: JSON.stringify({ device_code: data.device_code, interval: data.interval || 5 }) });
+    if (result?.api_key) {
+      _authApiKey = result.api_key;
+      document.getElementById('auth-pending').style.display = 'none';
+      document.getElementById('auth-select').style.display = 'block';
+      const memories = await api('/cloud/memories?api_key=' + encodeURIComponent(result.api_key));
+      const sel = document.getElementById('auth-memory-select');
+      sel.innerHTML = '';
+      (memories || []).forEach(m => { const o = document.createElement('option'); o.value = m.id; o.textContent = m.name || m.id; sel.appendChild(o); });
+      if (!memories?.length) sel.innerHTML = '<option value="">No memories found</option>';
+    }
+  } catch (e) {
+    document.getElementById('auth-pending').innerHTML = `<p style="color:var(--red)">${esc(e.message)}</p><button class="btn" style="margin-top:12px" onclick="startDeviceAuth()">Retry</button>`;
+  }
+}
+
+async function confirmMemory() {
+  const sel = document.getElementById('auth-memory-select');
+  await api('/cloud/connect', { method: 'POST', body: JSON.stringify({ api_key: _authApiKey, memory_id: sel.value, memory_name: sel.options[sel.selectedIndex]?.textContent || sel.value }) });
+  document.getElementById('auth-select').style.display = 'none';
+  document.getElementById('auth-done').style.display = 'block';
+  setTimeout(() => renderSyncPanel(), 2000);
+}
+
+async function disconnectCloud() {
+  if (!confirm('Disconnect from cloud? Local memories will remain.')) return;
+  await api('/cloud/disconnect', { method: 'POST' });
+  renderSyncPanel();
+}
+
+// ── Settings Panel ──
+async function renderSettingsPanel() {
+  const container = document.getElementById('settings-panel-inner');
+  const data = await api('/config');
+  if (!data) { container.innerHTML = '<div class="empty-state"><p>Could not load settings.</p></div>'; return; }
+
+  const d = data.daemon || {};
+  const dev = data.device || {};
+  const cloud = data.cloud || {};
+  const emb = data.embedding || {};
+  const git = data.git_sync || {};
+
+  let html = `<h2 style="font-size:1.1rem;margin-bottom:20px">${t('settings.title')}</h2>`;
+
+  // Language section (interactive, persisted in localStorage)
+  html += `<div class="settings-section"><h3>${t('settings.section.language')}</h3>`;
+  html += `<div class="setting-row">
+    <div class="setting-label">${t('settings.interface_lang')}<small>${t('settings.interface_lang_desc')}</small></div>
+    <select id="lang-select-settings" onchange="setLocale(this.value)" style="background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px;font-size:0.85rem;outline:none">
+      <option value="en"${currentLocale==='en'?' selected':''}>🇬🇧 English</option>
+      <option value="zh"${currentLocale==='zh'?' selected':''}>🇨🇳 中文</option>
+    </select>
+  </div>`;
+  html += '</div>';
+
+  // Embedding section (interactive)
+  html += `<div class="settings-section"><h3>${t('settings.section.embedding')}</h3>`;
+  html += settingToggle(t('settings.embedding_multi'), 'embedding_lang', emb.language === 'multilingual',
+    t('settings.embedding_desc'));
+  html += settingDisplay(t('settings.model'), emb.model_id || 'auto-detect');
+  html += '</div>';
+
+  // Git Sync (interactive)
+  html += `<div class="settings-section"><h3>${t('settings.section.git')}</h3>`;
+  html += settingToggle(t('settings.git_auto_commit'), 'git_auto_commit', git.auto_commit === true,
+    t('settings.git_auto_desc'));
+  html += settingDisplay(t('settings.branch'), git.branch || 'current branch');
+  html += '</div>';
+
+  // Cloud section (read-only display)
+  html += `<div class="settings-section"><h3>${t('settings.section.cloud')}</h3>`;
+  html += settingDisplay(t('settings.status'), cloud.enabled
+    ? `<span style="color:var(--green)">&#9679; ${t('sync.connected')}</span>`
+    : `<span style="color:var(--text-muted)">&#9675; ${t('sync.not_connected')}</span>`, true);
+  if (cloud.enabled) {
+    html += settingDisplay(t('settings.memory_id'), cloud.memory_id || 'N/A');
+    html += settingDisplay(t('settings.auto_sync'), cloud.auto_sync ? t('settings.yes') : t('settings.no'));
+    const apiBase = cloud.api_base || 'N/A';
+    const isLocal = apiBase.includes('localhost') || apiBase.includes('127.0.0.1');
+    html += settingDisplay(t('settings.api_base'),
+      `${esc(apiBase)}${isLocal ? ' <span style="color:var(--yellow);font-size:0.75rem;font-weight:600">' + t('settings.dev_mode') + '</span>' : ''}`, true);
+  }
+  html += '</div>';
+
+  // Daemon info
+  html += `<div class="settings-section"><h3>${t('settings.section.daemon')}</h3>`;
+  html += settingDisplay(t('settings.port'), d.port || 37800);
+  html += settingDisplay(t('settings.log_level'), d.log_level || 'info');
+  html += settingDisplay(t('settings.device_id'), `<span style="font-family:monospace;font-size:0.76rem">${esc(dev.id || 'N/A')}</span>`, true);
+  html += settingDisplay(t('settings.device_name'), dev.name || 'N/A');
+  html += '</div>';
+
+  // Workspaces
+  html += `<div class="settings-section"><h3>${t('settings.section.workspaces')}</h3><div id="ws-list"><span style="color:var(--text-muted)">${t('common.loading')}</span></div></div>`;
+
+  container.innerHTML = html;
+
+  // Load workspaces async
+  try {
+    const ws = await (await fetch('/api/v1/workspaces')).json();
+    const el = document.getElementById('ws-list');
+    if (!ws || Object.keys(ws).length === 0) {
+      el.innerHTML = `<span style="color:var(--text-muted);font-size:0.82rem">${t('settings.ws_no')}</span>`;
+    } else {
+      const entries = Object.entries(ws)
+        .filter(([dir]) => {
+          if (dir.startsWith('/tmp/') || dir.startsWith('/private/tmp/') || dir.startsWith('/var/')) return false;
+          if (dir.includes('awareness-local-smoke') || dir.includes('awareness-local-stop') ||
+              dir.includes('awareness-local-embed') || dir.includes('awareness-local-noise') ||
+              dir.includes('awareness-local-focus') || dir.includes('XXXXXX')) return false;
+          return true;
+        })
+        .sort((a, b) => (b[1].lastUsed || '').localeCompare(a[1].lastUsed || ''));
+      let h = '';
+      for (const [dir, w] of entries) {
+        const name = w.name || dir.split('/').pop() || dir;
+        const isCurrent = dir === (window._currentProjectDir || '');
+        h += `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;border-radius:var(--radius-sm);transition:background 150ms${isCurrent?';background:var(--bg-active);border-left:3px solid var(--accent)':''}" onclick="switchWorkspace('${esc(dir)}',${w.port})" onmouseover="this.style.background='var(--bg-hover)'" onmouseout="this.style.background='${isCurrent?'var(--bg-active)':''}'">
+          <span style="font-size:1rem">${isCurrent ? '&#128205;' : '&#128193;'}</span>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:0.85rem;font-weight:${isCurrent?'600':'400'}${isCurrent?';color:var(--accent)':''}">${esc(name)}</div>
+            <div style="font-size:0.72rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(dir)}">${esc(dir)}</div>
+          </div>
+          <span style="font-size:0.72rem;color:var(--text-muted)">${w.lastUsed ? formatDate(w.lastUsed) : ''}</span>
+        </div>`;
+      }
+      el.innerHTML = h || `<span style="color:var(--text-muted);font-size:0.82rem">${t('settings.ws_no_user')}</span>`;
+    }
+  } catch {}
+}
+
+function settingDisplay(label, value, isHtml) {
+  return `<div class="setting-row"><span class="setting-label">${esc(label)}</span><span class="setting-value">${isHtml ? value : esc(String(value))}</span></div>`;
+}
+
+function settingToggle(label, key, isOn, desc) {
+  return `<div class="setting-row">
+    <div class="setting-label">${esc(label)}${desc ? `<small>${esc(desc)}</small>` : ''}</div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <span style="font-size:0.78rem;color:var(--text-muted)">${isOn ? t('settings.on') : t('settings.off')}</span>
+      <div class="toggle${isOn ? ' on' : ''}" data-key="${esc(key)}" onclick="toggleSettingValue(this)"><div class="knob"></div></div>
+    </div>
+  </div>`;
+}
+
+async function toggleSettingValue(el) {
+  const key = el.dataset.key;
+  const isOn = el.classList.contains('on');
+  const newVal = !isOn;
+
+  let payload = {};
+  if (key === 'embedding_lang') {
+    payload = { embedding: { language: newVal ? 'multilingual' : 'english' } };
+  } else if (key === 'git_auto_commit') {
+    payload = { git_sync: { auto_commit: newVal } };
+  }
+
+  const result = await api('/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (result && !result.error) {
+    el.classList.toggle('on');
+    const label = el.previousElementSibling;
+    if (label) label.textContent = newVal ? t('settings.on') : t('settings.off');
+  }
+}
+
+// ── Search Modal ──
+function openSearch() {
+  document.getElementById('search-overlay').classList.add('visible');
+  const input = document.getElementById('search-modal-input');
+  input.value = '';
+  input.focus();
+  document.getElementById('search-results').innerHTML = '<div class="search-hint">Type to search... (hybrid semantic + keyword)</div>';
+  searchFocusIdx = -1;
+}
+function closeSearch() {
+  document.getElementById('search-overlay').classList.remove('visible');
+}
+
+document.addEventListener('keydown', function(e) {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); openSearch(); }
+  if (e.key === 'Escape') closeSearch();
+});
+
+document.getElementById('search-modal-input').addEventListener('input', function() {
+  clearTimeout(searchDebounce);
+  const q = this.value.trim();
+  if (!q) { document.getElementById('search-results').innerHTML = '<div class="search-hint">Type to search...</div>'; return; }
+  searchDebounce = setTimeout(() => doSearch(q), 200);
+});
+
+document.getElementById('search-modal-input').addEventListener('keydown', function(e) {
+  const items = document.querySelectorAll('.search-result');
+  if (e.key === 'ArrowDown') { e.preventDefault(); searchFocusIdx = Math.min(searchFocusIdx + 1, items.length - 1); updateSearchFocus(items); }
+  if (e.key === 'ArrowUp') { e.preventDefault(); searchFocusIdx = Math.max(searchFocusIdx - 1, 0); updateSearchFocus(items); }
+  if (e.key === 'Enter' && searchFocusIdx >= 0 && items[searchFocusIdx]) { items[searchFocusIdx].click(); }
+});
+
+function updateSearchFocus(items) {
+  items.forEach((el, i) => el.classList.toggle('focused', i === searchFocusIdx));
+  if (items[searchFocusIdx]) items[searchFocusIdx].scrollIntoView({ block: 'nearest' });
+}
+
+async function doSearch(q) {
+  const results = await api('/search?q=' + encodeURIComponent(q) + '&limit=20');
+  const container = document.getElementById('search-results');
+  if (!results?.items?.length) { container.innerHTML = '<div class="search-hint">No results found.</div>'; return; }
+
+  searchFocusIdx = -1;
+  let html = '';
+  for (const r of results.items) {
+    const icon = r.type === 'knowledge_card' ? '&#128218;' : r.category === 'pitfall' ? '&#9888;' : '&#128466;';
+    const title = r.title || 'Untitled';
+    const snippet = (r.summary || r.content || '').replace(/\n/g, ' ').substring(0, 120);
+    const score = r.score != null ? Math.round(r.score * 100) : '';
+
+    // Determine navigation target based on item type
+    let navItem;
+    const isKC = (r.id && r.id.startsWith('kc_')) || r.type === 'knowledge_card'
+      || ENGINEERING_CATS.includes(r.type) || PERSONAL_CATS.includes(r.type);
+    if (isKC) {
+      navItem = `{type:'card',id:'${esc(r.id)}'}`;
+    } else {
+      // Memory item — show memory detail
+      navItem = `{type:'memory',id:'${esc(r.id)}'}`;
+    }
+
+    html += `<div class="search-result" onclick="closeSearch();navigate(${navItem})">
+      <span class="search-result-icon">${icon}</span>
+      <div class="search-result-info">
+        <div class="search-result-title">${esc(title)}</div>
+        <div class="search-result-snippet">${esc(snippet)}</div>
+      </div>
+      ${score ? `<span class="search-result-score">${score}%</span>` : ''}
+    </div>`;
+  }
+  container.innerHTML = html;
+}
+
+// ── Stats Bar ──
+function updateStatsBar() {
+  document.getElementById('stat-memories').textContent = t('stats.memories_count', { n: statsData.totalMemories || 0 });
+  document.getElementById('stat-cards').textContent = t('stats.cards_count', { n: statsData.totalKnowledge || 0 });
+  document.getElementById('stat-skills').textContent = t('stats.skills_count', { n: sidebarData.skills.filter(s => s.status === 'active').length });
+  document.getElementById('stat-tasks').textContent = t('stats.tasks_count', { n: statsData.totalTasks || 0 });
+}
+
+async function checkDaemon() {
+  try {
+    const resp = await fetch('/healthz');
+    if (!resp.ok) throw new Error();
+    const d = await resp.json();
+    document.getElementById('daemon-dot').className = 'dot ok';
+    document.getElementById('daemon-label').textContent = 'v' + (d.version || '?');
+    if (d.project_dir) {
+      window._currentProjectDir = d.project_dir;
+      const name = d.project_dir.split('/').pop() || d.project_dir;
+      document.getElementById('project-name-header').textContent = name;
+      document.title = name + ' — Awareness Local';
+    }
+    const cfg = await api('/config');
+    document.getElementById('stat-cloud').textContent = cfg?.cloud?.enabled ? 'Cloud: synced' : 'Cloud: local only';
+  } catch {
+    document.getElementById('daemon-dot').className = 'dot err';
+    document.getElementById('daemon-label').textContent = 'Offline';
+    document.getElementById('stat-cloud').textContent = 'Cloud: N/A';
+  }
+}
+
+// ── Workspace Picker ──
+let wsPickerVisible = false;
+let workspacesCache = null;
+
+function toggleWorkspacePicker() {
+  wsPickerVisible = !wsPickerVisible;
+  const picker = document.getElementById('ws-picker');
+  if (wsPickerVisible) {
+    // Position dropdown directly under the button
+    const btn = document.getElementById('ws-btn');
+    const rect = btn.getBoundingClientRect();
+    picker.style.top = (rect.bottom + 4) + 'px';
+    picker.style.left = rect.left + 'px';
+    picker.style.display = 'block';
+    loadWorkspacePicker();
+  } else {
+    picker.style.display = 'none';
+  }
+}
+
+// Close picker when clicking outside
+document.addEventListener('click', function(e) {
+  if (wsPickerVisible && !e.target.closest('#ws-picker') && !e.target.closest('#ws-btn')) {
+    wsPickerVisible = false;
+    document.getElementById('ws-picker').style.display = 'none';
+  }
+});
+
+async function loadWorkspacePicker() {
+  const picker = document.getElementById('ws-picker');
+  picker.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:0.82rem">Loading workspaces...</div>';
+
+  const ws = await api('/workspaces');
+  if (!ws || typeof ws !== 'object') {
+    picker.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:0.82rem">No workspaces found.</div>';
+    return;
+  }
+
+  // Filter out temp/test dirs, keep real user projects
+  const entries = Object.entries(ws)
+    .filter(([dir]) => {
+      if (dir.startsWith('/tmp/') || dir.startsWith('/private/tmp/') || dir.startsWith('/var/')) return false;
+      if (dir.includes('awareness-local-smoke') || dir.includes('awareness-local-stop') ||
+          dir.includes('awareness-local-embed') || dir.includes('awareness-local-noise') ||
+          dir.includes('awareness-local-focus') || dir.includes('XXXXXX')) return false;
+      return true;
+    })
+    .sort((a, b) => (b[1].lastUsed || '').localeCompare(a[1].lastUsed || ''));
+
+  if (entries.length === 0) {
+    picker.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:0.82rem">No workspaces registered.</div>';
+    return;
+  }
+
+  const currentPort = location.port;
+  let html = '<div style="padding:8px 12px;font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;font-weight:600;letter-spacing:0.5px;border-bottom:1px solid var(--border)">Workspaces</div>';
+
+  for (const [dir, w] of entries) {
+    const name = w.name || dir.split('/').pop() || dir;
+    const isCurrent = dir === (window._currentProjectDir || '');
+    const isAccessible = w.port && w.port > 0;
+    const lastUsed = w.lastUsed ? formatDate(w.lastUsed) : '';
+
+    html += `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:${isAccessible?'pointer':'default'};transition:background 150ms${isCurrent?';background:var(--bg-active);border-left:3px solid var(--accent)':''}"
+      ${isAccessible && !isCurrent ? `onclick="switchWorkspace('${esc(dir)}',${w.port})" onmouseover="this.style.background='var(--bg-hover)'" onmouseout="this.style.background='${isCurrent?'var(--bg-active)':''}'"` : ''}>
+      <div style="width:32px;height:32px;border-radius:8px;background:var(--bg-tertiary);display:flex;align-items:center;justify-content:center;font-size:0.85rem;flex-shrink:0;${isCurrent?'border:1px solid var(--accent)':''}">${name.charAt(0).toUpperCase()}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:0.85rem;font-weight:${isCurrent?'600':'500'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap${isCurrent?';color:var(--accent)':''}">${esc(name)}${isCurrent?' <span style="font-size:0.7rem;color:var(--accent)">(current)</span>':''}</div>
+        <div style="font-size:0.72rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(dir)}">${esc(dir)}</div>
+      </div>
+      <div style="font-size:0.72rem;color:var(--text-muted);white-space:nowrap">${lastUsed}</div>
+    </div>`;
+  }
+
+  picker.innerHTML = html;
+}
+
+async function switchWorkspace(dir, _port) {
+  wsPickerVisible = false;
+  document.getElementById('ws-picker').style.display = 'none';
+
+  // Single-daemon policy (F-040 v0.6.2): always POST /workspace/switch to
+  // the currently-running daemon. The legacy behaviour of jumping to a
+  // per-project port (e.g. 37802) broke because workspaces.json could
+  // contain stale ports that no longer have a listening daemon. The
+  // `_port` argument is preserved for call-site compatibility but ignored.
+
+  // Same port — hot-switch via API
+  const area = document.getElementById('content-area');
+  if (area) area.innerHTML = '<div class="loading"><div class="spinner"></div><p>Switching workspace...</p></div>';
+
+  const result = await api('/workspace/switch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project_dir: dir })
+  });
+
+  if (result && result.status === 'ok') {
+    // Reload ALL data for new workspace
+    window._currentProjectDir = result.projectDir;
+    const name = result.projectDir.split('/').pop() || result.projectDir;
+    document.getElementById('project-name-header').textContent = name;
+    document.title = name + ' — Awareness Local';
+    selectedItem = { type: 'overview' };
+    // Reset cached data so tabs reload fresh
+    memoriesLoaded = false;
+    await loadSidebarData();
+    // If currently on data tab, reload memories too
+    if (currentTopTab === 'data') loadMemories();
+    if (currentTopTab === 'sync') renderSyncPanel();
+    if (currentTopTab === 'settings') renderSettingsPanel();
+  } else {
+    if (area) area.innerHTML = '<div class="empty-state"><p>Failed to switch: ' + esc(result?.error || 'Unknown error') + '</p></div>';
+  }
+}
+
+// ── Language menu ──
+function toggleLangMenu() {
+  const existing = document.getElementById('lang-menu');
+  if (existing) { existing.remove(); return; }
+  const btn = document.getElementById('lang-toggle');
+  const rect = btn.getBoundingClientRect();
+  const menu = document.createElement('div');
+  menu.id = 'lang-menu';
+  menu.style.cssText = `position:fixed;top:${rect.bottom + 4}px;left:${rect.left}px;z-index:100;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:0 8px 24px rgba(0,0,0,0.4);min-width:140px;overflow:hidden`;
+  const languages = [
+    { code: 'en', label: 'English', flag: '🇬🇧' },
+    { code: 'zh', label: '中文', flag: '🇨🇳' },
+  ];
+  for (const lang of languages) {
+    const isActive = currentLocale === lang.code;
+    const item = document.createElement('div');
+    item.style.cssText = `display:flex;align-items:center;gap:8px;padding:8px 14px;cursor:pointer;font-size:0.85rem;${isActive ? 'background:var(--bg-active);color:var(--accent)' : ''}`;
+    item.innerHTML = `<span style="font-size:1rem">${lang.flag}</span><span style="flex:1">${lang.label}</span>${isActive ? '<span>&#10003;</span>' : ''}`;
+    item.onmouseover = () => { if (!isActive) item.style.background = 'var(--bg-hover)'; };
+    item.onmouseout = () => { if (!isActive) item.style.background = ''; };
+    item.onclick = () => {
+      setLocale(lang.code);
+      document.getElementById('lang-menu')?.remove();
+    };
+    menu.appendChild(item);
+  }
+  document.body.appendChild(menu);
+  // Close on outside click
+  setTimeout(() => {
+    const handler = (e) => {
+      if (!e.target.closest('#lang-menu') && !e.target.closest('#lang-toggle')) {
+        menu.remove();
+        document.removeEventListener('click', handler);
+      }
+    };
+    document.addEventListener('click', handler);
+  }, 10);
+}
+
+// Update header lang label
+function updateLangLabel() {
+  const el = document.getElementById('lang-label');
+  if (el) el.textContent = currentLocale.toUpperCase();
+}
+
+// ── Init ──
+async function init() {
+  applyStaticI18n();
+  updateLangLabel();
+  await Promise.all([checkDaemon(), loadSidebarData()]);
+  setInterval(() => { checkDaemon(); }, 30000);
+}
+init();
+
+/* ── Expose i18n primitives to window for decoupled modules (onboarding, etc.) ── */
+window.LOCALES = LOCALES;
+window.t = t;
+
+</script>
+
+<!-- ── F-040 Onboarding: loaded as decoupled modules from /web/onboarding/* ── -->
+<link rel="stylesheet" href="/web/onboarding/styles.css">
+<script src="/web/onboarding/i18n.js"></script>
+<script src="/web/onboarding/state.js"></script>
+<script src="/web/onboarding/result-formatter.js"></script>
+<script src="/web/onboarding/recall-suggestions.js"></script>
+<script src="/web/onboarding/device-auth-flow.js"></script>
+<script src="/web/onboarding/steps.js"></script>
+<script src="/web/onboarding/index.js"></script>
+<script src="/web/onboarding/status-chip.js"></script>
+<script src="/web/onboarding/privacy-settings.js"></script>
+</body>
+</html>

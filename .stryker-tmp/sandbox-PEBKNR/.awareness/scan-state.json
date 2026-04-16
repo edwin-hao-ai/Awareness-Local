@@ -1,0 +1,21 @@
+{
+  "status": "idle",
+  "phase": null,
+  "discovered_total": 169,
+  "discovered_scanned": 0,
+  "index_total": 169,
+  "index_done": 169,
+  "index_skipped": 169,
+  "embed_total": 0,
+  "embed_done": 0,
+  "total_files": 177,
+  "total_code_files": 169,
+  "total_doc_files": 8,
+  "total_symbols": 907,
+  "total_chunks": 0,
+  "last_full_scan_at": "2026-04-13T14:58:44.975Z",
+  "last_incremental_at": "2026-04-15T16:28:17.489Z",
+  "last_git_commit": "d708b2801d751a4bc9c36b1132418f65050552fa",
+  "scan_duration_ms": 394,
+  "errors": []
+}

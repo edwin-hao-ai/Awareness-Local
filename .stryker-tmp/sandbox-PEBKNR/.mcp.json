@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "awareness-memory": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "/Users/edwinhao/Awareness/sdks/local/src/mcp-stdio.mjs"
+      ]
+    }
+  }
+}
