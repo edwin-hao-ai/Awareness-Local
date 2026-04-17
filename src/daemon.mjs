@@ -196,6 +196,8 @@ export class AwarenessLocalDaemon {
 
     // Skill decay timer (runs every 24h)
     this._skillDecayTimer = null;
+    // 0.7.2: daily graph edge cap + VACUUM to bound index.db growth.
+    this._graphMaintenanceTimer = null;
 
     // F-038: Workspace scanner state
     this.scanState = createScanState();
@@ -381,6 +383,9 @@ export class AwarenessLocalDaemon {
     // ---- Skill decay timer (every 24h) ----
     this._startSkillDecayTimer();
 
+    // ---- Graph maintenance: edge cap + VACUUM every 24h ----
+    this._startGraphMaintenanceTimer();
+
     console.log(
       `[awareness-local] daemon running at http://localhost:${this.port}`
     );
@@ -408,6 +413,10 @@ export class AwarenessLocalDaemon {
       clearInterval(this._skillDecayTimer);
       this._skillDecayTimer = null;
     }
+    if (this._graphMaintenanceTimer) {
+      clearInterval(this._graphMaintenanceTimer);
+      this._graphMaintenanceTimer = null;
+    }
 
     // Stop workspace watchers (F-038)
     if (this._scanAbortController) {
@@ -423,9 +432,11 @@ export class AwarenessLocalDaemon {
       this._gitHeadWatcher = null;
     }
 
-    // Stop cloud sync
+    // Stop cloud sync — MUST await so in-flight fullSync() drains before
+    // indexer.close() below. Pre-0.7.2 this was fire-and-forget and produced
+    // the "database connection is not open" log flood.
     if (this.cloudSync) {
-      this.cloudSync.stop();
+      try { await this.cloudSync.stop(); } catch { /* best-effort */ }
       this.cloudSync = null;
     }
 
@@ -1981,6 +1992,45 @@ ${item.description || item.title || ''}
   }
 
   /**
+   * 0.7.2: bound graph_edges growth + reclaim pages daily.
+   *
+   * Order matters: prune first (large DELETE), then VACUUM to actually
+   * return the pages to disk. SQLite does not auto-compact.
+   */
+  _startGraphMaintenanceTimer() {
+    const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+    const MAX_EDGES_PER_NODE = 50;
+    const run = () => {
+      if (!this.indexer || !this.indexer.db) return;
+      try {
+        const pruned = this.indexer.pruneGraphEdges({
+          maxPerNode: MAX_EDGES_PER_NODE,
+          edgeType: 'doc_reference',
+        });
+        if (pruned.removed > 0) {
+          console.log(`[awareness-local] graph maintenance: pruned ${pruned.removed} doc_reference edges`);
+        }
+        // Only VACUUM if we actually freed rows — VACUUM is expensive and
+        // unnecessary on a quiet DB.
+        if (pruned.removed > 1000) {
+          const compact = this.indexer.compactDb();
+          if (compact.ok && compact.bytesFreed > 0) {
+            const mb = (compact.bytesFreed / (1024 * 1024)).toFixed(1);
+            console.log(`[awareness-local] graph maintenance: VACUUM freed ${mb} MB`);
+          }
+        }
+      } catch (err) {
+        console.warn('[awareness-local] graph maintenance failed:', err.message);
+      }
+    };
+    // Defer initial run so daemon startup is not delayed by a possibly-large
+    // VACUUM on the first boot after upgrading.
+    setTimeout(run, 60_000);
+    this._graphMaintenanceTimer = setInterval(run, TWENTY_FOUR_HOURS);
+    if (this._graphMaintenanceTimer.unref) this._graphMaintenanceTimer.unref();
+  }
+
+  /**
    * Recalculate decay_score for every non-pinned skill.
    * Formula (aligned with cloud backend):
    *   baseDecay = exp(-0.693 * daysSince / 30)   // 30-day half-life
@@ -2052,7 +2102,7 @@ ${item.description || item.title || ''}
       // 1. Stop watchers & timers
       if (this.watcher) { this.watcher.close(); this.watcher = null; }
       if (this._reindexTimer) { clearTimeout(this._reindexTimer); this._reindexTimer = null; }
-      if (this.cloudSync) { this.cloudSync.stop(); this.cloudSync = null; }
+      if (this.cloudSync) { try { await this.cloudSync.stop(); } catch { /* best-effort */ } this.cloudSync = null; }
 
       // 2. Close old indexer
       if (this.indexer && this.indexer.close) {

@@ -55,10 +55,23 @@ async function _loadHfModule() {
     return mod;
   } catch {
     _hfAvailable = false;
+    // Enhanced warning with more detailed instructions
     console.warn(
-      '[embedder] @huggingface/transformers is not installed. ' +
-        'Embedding-based semantic search is disabled; falling back to FTS5-only mode. ' +
-        'Install it with: npm install @huggingface/transformers'
+      '\n┌─────────────────────────────────────────────────────────────────┐\n' +
+      '│                   AWARENESS LOCAL NOTICE                        │\n' +
+      '├─────────────────────────────────────────────────────────────────┤\n' +
+      '│ @huggingface/transformers is not installed.                     │\n' +
+      '│ Embedding-based semantic search is disabled.                    │\n' +
+      '│                                                                 │\n' +
+      '│ To enable vector search for better recall accuracy:             │\n' +
+      '│                                                                 │\n' +
+      '│    npm install @huggingface/transformers                        │\n' +
+      '│                                                                 │\n' +
+      '│ This will download ~23MB for English model (or ~118MB for       │\n' +
+      '│ multilingual).                                                  │\n' +
+      '│                                                                 │\n' +
+      '│ Falling back to FTS5-only search mode.                          │\n' +
+      '└─────────────────────────────────────────────────────────────────┘\n'
     );
     return null;
   }

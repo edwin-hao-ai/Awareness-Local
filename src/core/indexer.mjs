@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS knowledge_cards (
   link_count_incoming INTEGER DEFAULT 0,
   link_count_outgoing INTEGER DEFAULT 0,
   created_at TEXT NOT NULL,
+  updated_at TEXT,
+  local_id TEXT,
   filepath TEXT NOT NULL UNIQUE,
   synced_to_cloud INTEGER DEFAULT 0
 );
@@ -369,6 +371,34 @@ export class Indexer {
     this._migrateNoveltyScore();
     // F-043: Add confidence + consecutive_failures for outcome feedback loop
     this._migrateSkillOutcomeFields();
+    // 0.7.2: backfill local_id + updated_at on knowledge_cards.
+    // local_id introduced in cloud-sync v2 (commit 7bc6f0da, 2026-04-09) but no
+    // ALTER shipped — breaks _pushCardsV2. updated_at used by lifecycle-manager
+    // garbage collection. Both must exist on every upgraded DB.
+    this._migrateCardLocalIdAndUpdatedAt();
+  }
+
+  /**
+   * 0.7.2 migration: adds `local_id` and `updated_at` to knowledge_cards.
+   *
+   * Backfills `updated_at = created_at` for existing rows so lifecycle-manager
+   * TTL queries don't silently match every row.
+   */
+  _migrateCardLocalIdAndUpdatedAt() {
+    try {
+      const cols = this.db.prepare(`PRAGMA table_info(knowledge_cards)`).all();
+      const colNames = new Set(cols.map((c) => c.name));
+      if (!colNames.has('local_id')) {
+        this.db.exec('ALTER TABLE knowledge_cards ADD COLUMN local_id TEXT');
+        this.db.exec('UPDATE knowledge_cards SET local_id = id WHERE local_id IS NULL');
+      }
+      if (!colNames.has('updated_at')) {
+        this.db.exec('ALTER TABLE knowledge_cards ADD COLUMN updated_at TEXT');
+        this.db.exec('UPDATE knowledge_cards SET updated_at = created_at WHERE updated_at IS NULL');
+      }
+    } catch (err) {
+      console.warn('[indexer] card local_id/updated_at migration warning:', err.message);
+    }
   }
 
   /**
@@ -650,7 +680,7 @@ export class Indexer {
                                    confidence, status, tags, source, parent_card_id,
                                    evolution_type, card_type, growth_stage,
                                    last_touched_at, link_count_incoming, link_count_outgoing,
-                                   created_at, filepath,
+                                   created_at, updated_at, local_id, filepath,
                                    cloud_id, version, schema_version, sync_status,
                                    last_pushed_at, last_pulled_at,
                                    novelty_score, salience_reason)
@@ -658,7 +688,7 @@ export class Indexer {
               @confidence, @status, @tags, @source, @parent_card_id,
               @evolution_type, @card_type, @growth_stage,
               @last_touched_at, @link_count_incoming, @link_count_outgoing,
-              @created_at, @filepath,
+              @created_at, @updated_at, @local_id, @filepath,
               @cloud_id, @version, @schema_version, @sync_status,
               @last_pushed_at, @last_pulled_at,
               @novelty_score, @salience_reason)
@@ -678,6 +708,8 @@ export class Indexer {
         last_touched_at = excluded.last_touched_at,
         link_count_incoming = excluded.link_count_incoming,
         link_count_outgoing = excluded.link_count_outgoing,
+        updated_at      = excluded.updated_at,
+        local_id        = COALESCE(knowledge_cards.local_id, excluded.local_id),
         filepath        = excluded.filepath,
         cloud_id        = excluded.cloud_id,
         version         = excluded.version,
@@ -877,6 +909,8 @@ export class Indexer {
       link_count_incoming: card.link_count_incoming ?? 0,
       link_count_outgoing: card.link_count_outgoing ?? 0,
       created_at: card.created_at || now,
+      updated_at: card.updated_at || now,
+      local_id: card.local_id || card.id,
       filepath: card.filepath,
       cloud_id: card.cloud_id || null,
       version: card.version != null ? card.version : 1,
@@ -1383,6 +1417,66 @@ Return ONLY JSON: {"title": "...", "summary": "..."}`;
     } catch (err) {
       console.warn('[indexer] graphInsertEdge failed:', err.message);
       return { inserted: false };
+    }
+  }
+
+  /**
+   * 0.7.2: cap edges per (from_node, edge_type) to prevent unbounded growth.
+   *
+   * Motivation: a user reported a 750 MB index.db where `doc_reference` edges
+   * alone accounted for 586,475 rows / ~350 MB (96% of edges). Each workspace
+   * scan adds edges without any cap, so the graph grows as O(N × fan-out).
+   * This method keeps only the top-N edges by weight for each (from_node,
+   * edge_type) pair. Run it periodically, not on every insert (DELETE per
+   * insert would be quadratic).
+   *
+   * Safe to call repeatedly; returns { removed }.
+   */
+  pruneGraphEdges({ maxPerNode = 50, edgeType = 'doc_reference' } = {}) {
+    try {
+      const result = this.db.prepare(`
+        DELETE FROM graph_edges
+        WHERE edge_type = ?
+          AND rowid IN (
+            SELECT rowid FROM (
+              SELECT rowid,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY from_node_id
+                       ORDER BY weight DESC, created_at DESC
+                     ) AS rn
+              FROM graph_edges
+              WHERE edge_type = ?
+            ) WHERE rn > ?
+          )
+      `).run(edgeType, edgeType, maxPerNode);
+      return { removed: result.changes || 0 };
+    } catch (err) {
+      console.warn('[indexer] pruneGraphEdges failed:', err.message);
+      return { removed: 0 };
+    }
+  }
+
+  /**
+   * 0.7.2: run a VACUUM + PRAGMA optimize pass to reclaim pages after large
+   * prune/archive operations. SQLite does not auto-compact; without this the
+   * DB file keeps its peak size forever.
+   *
+   * Cheap on small DBs, expensive on large ones — call from a daily timer,
+   * not inline. Returns { ok, bytesFreed? }.
+   */
+  compactDb() {
+    try {
+      const beforeRow = this.db.prepare('PRAGMA page_count').get();
+      const pageSizeRow = this.db.prepare('PRAGMA page_size').get();
+      const before = (beforeRow?.page_count || 0) * (pageSizeRow?.page_size || 0);
+      this.db.exec('VACUUM');
+      this.db.exec('PRAGMA optimize');
+      const afterRow = this.db.prepare('PRAGMA page_count').get();
+      const after = (afterRow?.page_count || 0) * (pageSizeRow?.page_size || 0);
+      return { ok: true, bytesFreed: Math.max(0, before - after) };
+    } catch (err) {
+      console.warn('[indexer] compactDb failed:', err.message);
+      return { ok: false };
     }
   }
 

@@ -700,16 +700,16 @@ Commands:
   benchmark Run recall benchmark against a JSONL dataset
 
 Options:
-  --project <dir>   Project directory (default: current directory)
-  --port <port>     HTTP port (default: 37800)
-  --foreground      Run in foreground (don't detach)
-  --dataset <path>  Benchmark JSONL dataset path
-  --backend <kind>  builtin | qmd | hybrid | all (benchmark only)
-  --report <path>   Write benchmark JSON report
+  --project <dir>      Project directory (default: current directory)
+  --port <port>        HTTP port (default: 37800)
+  --foreground         Run in foreground (don't detach)
+  --dataset <path>     Benchmark JSONL dataset path
+  --backend <kind>     builtin | qmd | hybrid | all (benchmark only)
+  --report <path>      Write benchmark JSON report
   --markdown-report <path>  Write benchmark Markdown report
-  --reindex         Rebuild the benchmark target index before running
-  --json            Print benchmark report as JSON
-  --help            Show this help message
+  --reindex            Rebuild the benchmark target index before running
+  --json               Print benchmark report as JSON
+  --help               Show this help message
 
 Examples:
   npx @awareness-sdk/local start
@@ -719,7 +719,7 @@ Examples:
   npx @awareness-sdk/local mcp --project /path/to/project --port 37800
   npx @awareness-sdk/local benchmark --project /path/to/project --dataset tests/memory-benchmark/datasets/recall_core.jsonl
   npx @awareness-sdk/local benchmark --project tests/memory-benchmark/projects/core-recall --dataset tests/memory-benchmark/datasets/recall_core.jsonl --backend builtin --reindex
-  npx @awareness-sdk/local benchmark --project tests/memory-benchmark/projects/universal-core --dataset tests/memory-benchmark/datasets/universal_core.jsonl --backend all --report tests/memory-benchmark/reports/universal_core.json
+  npx @awareness-sdk/local benchmark --project tests/memory-benchmark/projects/universal-core --dataset tests/memory-benchmark/datasets/universal_core.jsonl --backend all --reindex --report tests/memory-benchmark/reports/universal_core.json
 `);
 }
 
@@ -765,3 +765,44 @@ main().catch((err) => {
   console.error(`Fatal error: ${err.message}`);
   process.exit(1);
 });
+
+// ---------------------------------------------------------------------------
+// Command: install-transformers
+// ---------------------------------------------------------------------------
+
+async function cmdInstallTransformers(flags) {
+  console.log('Installing @huggingface/transformers...');
+  
+  try {
+    // Try to require the transformers module to see if it's already installed
+    require.resolve('@huggingface/transformers');
+    console.log('@huggingface/transformers is already installed.');
+    return;
+  } catch (e) {
+    // Not installed, proceed with installation
+  }
+  
+  const { execSync } = await import('child_process');
+  
+  try {
+    // Determine the package manager based on lock files
+    const projectRoot = process.cwd();
+    const fs = await import('fs');
+    let cmd = 'npm install @huggingface/transformers@^3.0.0';
+    
+    if (fs.existsSync('yarn.lock')) {
+      cmd = 'yarn add @huggingface/transformers@^3.0.0';
+    } else if (fs.existsSync('pnpm-lock.yaml')) {
+      cmd = 'pnpm add @huggingface/transformers@^3.0.0';
+    }
+    
+    console.log(`Running: ${cmd}`);
+    execSync(cmd, { stdio: 'inherit' });
+    
+    console.log('@huggingface/transformers installed successfully!');
+    console.log('Awareness Local now has vector search capabilities.');
+  } catch (err) {
+    console.error('Failed to install @huggingface/transformers:', err.message);
+    process.exit(1);
+  }
+}

@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.7.2] - 2026-04-17
+
+### Fixed — memory recovers after 0.7.0 regression
+- **Missing `local_id` / `updated_at` columns on `knowledge_cards`** — commit `7bc6f0da` introduced `SELECT ... local_id FROM knowledge_cards` for cloud-sync v2 optimistic pushes but shipped without an `ALTER TABLE` migration. Every upgraded user saw `_pushCardsV2 query failed: no such column: local_id` and `[lifecycle-manager] garbage collection failed: no such column: updated_at` on each sync tick. 0.7.2 adds an idempotent migration that backfills both columns on first open (`local_id = id`, `updated_at = created_at`). Old DBs heal themselves on restart.
+- **Daemon crash on some npm installs** — `@modelcontextprotocol/sdk` was declared as `^1.27.0` (caret). When npm's dedup logic hoisted parts of the SDK to top-level `node_modules` while leaving `mcp.js` nested, the ESM relative import of `./completable.js` broke with `ERR_MODULE_NOT_FOUND`. Now pinned to `1.29.0` to stabilise the dedup outcome.
+- **"database connection is not open" log flood on shutdown** — periodic `CloudSync.fullSync()` ran via unawaited `setInterval` callbacks. When `stop()` was called the interval was cleared, but in-flight syncs still hit the SQLite handle after the daemon closed it. `stop()` is now async and awaits the in-flight promise before returning; the interval body short-circuits once `_stopped` is set.
+
+### Added — bounded index.db growth
+- **Graph edge cap + VACUUM job** — workspace scanner was writing unbounded `doc_reference` edges (observed 31k nodes → 611k edges → 750 MB DB on a real user). New daily `indexer.pruneGraphEdges({ maxPerNode: 50 })` keeps the top-50 edges per node by weight and triggers `VACUUM` when the prune removes >1000 rows. First run is deferred 60 s after daemon start.
+- **L1 schema-column parity guard** — `scripts/verify-schema-columns.mjs` spins up an in-memory SQLite, runs `initSchema()`, and verifies every column referenced by `SELECT/INSERT/UPDATE` statements in the rest of the codebase actually exists. Wired into the root `ship-gate.sh`.
+- **L2 migration forward-compat test** — `test/migration-forward-compat.test.mjs` builds a pre-0.7.2 schema, opens it with the new `Indexer`, and asserts `_pushCardsV2`-shaped queries + lifecycle-manager GC UPDATEs no longer throw.
+- **L3 shutdown-race chaos test** — `test/cloud-sync-shutdown-race.test.mjs` pins the async-`stop()` contract: awaits in-flight, tolerates `"not open"` rejections, no-ops any queued tick.
+- **L4 clean-tempdir daemon-boot E2E** — `test/e2e/user-journeys/clean-tempdir-daemon-boot.spec.mjs` does a real `npm pack` + install into a fresh tempdir, spawns the daemon, and asserts `/healthz` + `/mcp tools/list` both return 200.
+
+## [0.7.1] - 2026-04-16
+
+### Changed
+- **Embedding model installation**: @huggingface/transformers is now installed via postinstall script to ensure vector search works out of the box. The package is now a required dependency instead of optional, guaranteeing users get full embedding functionality upon installation.
+
 ## [0.7.0] - 2026-04-16
 
 ### Added

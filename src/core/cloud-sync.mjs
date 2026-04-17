@@ -100,6 +100,11 @@ export class CloudSync {
     this.memoryStore = memoryStore;
     this._sseState = createSSEState();
     this._periodicTimer = null;
+    // Shutdown race guards: once stop() is called, no new sync starts and
+    // in-flight sync is awaited before DB can be closed. Prevents the
+    // "database connection is not open" log flood seen pre-0.7.2.
+    this._stopped = false;
+    this._inflightSync = null;
     ensureSyncSchema(indexer);
     ensureConflictSchema(indexer);
 
@@ -273,12 +278,20 @@ export class CloudSync {
   startPeriodicSync(intervalMin = DEFAULT_PERIODIC_INTERVAL_MIN) {
     if (intervalMin <= 0) return;
     this._periodicTimer = setInterval(async () => {
-      try {
-        const r = await this.fullSync();
-        if (r.pushed > 0 || r.pulled > 0 || r.insights_pushed > 0 || r.tasks_pushed > 0) {
-          console.log(`${LOG_PREFIX} Periodic sync: memories=${r.pushed}, insights=${r.insights_pushed}, tasks=${r.tasks_pushed}, pulled=${r.pulled}`);
-        }
-      } catch (err) { console.warn(`${LOG_PREFIX} Periodic sync failed:`, err.message); }
+      if (this._stopped) return;
+      // Track inflight so stop() can await it and avoid DB-closed errors
+      const p = this.fullSync()
+        .then((r) => {
+          if (r && (r.pushed > 0 || r.pulled > 0 || r.insights_pushed > 0 || r.tasks_pushed > 0)) {
+            console.log(`${LOG_PREFIX} Periodic sync: memories=${r.pushed}, insights=${r.insights_pushed}, tasks=${r.tasks_pushed}, pulled=${r.pulled}`);
+          }
+        })
+        .catch((err) => {
+          if (this._stopped && /not open|closed/i.test(err?.message || '')) return;
+          console.warn(`${LOG_PREFIX} Periodic sync failed:`, err.message);
+        })
+        .finally(() => { if (this._inflightSync === p) this._inflightSync = null; });
+      this._inflightSync = p;
     }, intervalMin * 60 * 1000);
   }
 
@@ -298,9 +311,16 @@ export class CloudSync {
     console.log(`${LOG_PREFIX} Started: SSE + periodic sync (${intervalMin}min) enabled`);
   }
 
-  stop() {
+  async stop() {
+    this._stopped = true;
     stopSSE(this._sseState);
     if (this._periodicTimer) { clearInterval(this._periodicTimer); this._periodicTimer = null; }
+    // Wait for any in-flight fullSync() to drain before returning, so the
+    // caller can safely close the DB without racing with push/pull queries.
+    if (this._inflightSync) {
+      try { await this._inflightSync; } catch { /* already logged */ }
+      this._inflightSync = null;
+    }
     console.log(`${LOG_PREFIX} Stopped`);
   }
 

@@ -665,7 +665,7 @@ export async function apiCloudConnect(daemon, req, res) {
   daemon.config = config;
 
   if (daemon.cloudSync) {
-    daemon.cloudSync.stop();
+    try { await daemon.cloudSync.stop(); } catch { /* best-effort */ }
   }
   track('cloud_auth_completed', {});
   try {
@@ -687,7 +687,7 @@ export async function apiCloudDisconnect(daemon, _req, res) {
   daemon.config = config;
 
   if (daemon.cloudSync) {
-    daemon.cloudSync.stop();
+    try { await daemon.cloudSync.stop(); } catch { /* best-effort */ }
     daemon.cloudSync = null;
   }
 
