@@ -1,5 +1,69 @@
 # Changelog
 
+## [0.7.3] - 2026-04-17
+
+### Fixed — memory quality (shipping the OpenClaw "distilled essence" philosophy)
+- **Polluted knowledge cards no longer pass the noise filter**. Pre-0.7.3 the
+  `classifyNoiseEvent` hard-block list (`Sender (untrusted metadata)`,
+  `[Operational context metadata ...]`, `[Subagent Context]`, …) was matched
+  against the raw content via `startsWith`, but the OpenClaw plugin wraps its
+  turn payloads in `Request: <metadata>` / `Result: <metadata>` envelopes. The
+  envelope prefix made every framework-metadata block slip past the filter
+  and end up as a `problem_solution` card titled `"Request: Sender
+  (untrusted metadata): { label: AwarenessClaw Desktop... }"`. Fix:
+  `SYSTEM_METADATA_PREFIXES` is now matched against both the raw trim and a
+  copy with the `Request:` / `Result:` / `Send:` / `Received:` / `User:` /
+  `Assistant:` / `Tool:` envelope stripped. `turn_brief` and `[turn_brief`
+  variants added to the prefix list. Real user requests that merely start
+  with `Request:` still pass — only framework-metadata payloads are blocked.
+- **Extraction is salience-aware, not greedy**. The old prompt told the client
+  LLM "HIGH_SALIENCE — always create cards for …", which drove it to emit a
+  `problem_solution` card for every turn that had any content at all —
+  including bare user prompts like "test if recall works". The new prompt
+  borrows the OpenClaw native `MEMORY.md` philosophy (*distilled essence, not
+  raw logs*): the LLM is first asked whether the content is worth recalling
+  six months from now, and `knowledge_cards: []` is a **first-class answer**.
+- **Per-card salience scores**. Every emitted card must now carry three
+  LLM self-assessed scores (0.0-1.0): `novelty_score`, `durability_score`,
+  `specificity_score`. The daemon discards any card where
+  `novelty_score < 0.4` or `durability_score < 0.4` before insertion. Missing
+  scores (legacy LLM clients) are waved through for compatibility.
+- **No more character-length gate**. Dropped the old
+  `MIN_EXTRACTABLE_CHARS = 150` hard-coded floor. A 15-character user
+  preference can be more valuable than a 5000-character log dump — the LLM is
+  trusted to judge value on substance, not size.
+
+### Added
+- **`sdks/_shared/prompts/extraction-salience.md`** — canonical single source of
+  truth for the extraction philosophy. All 10 extraction surfaces (see
+  `Awareness/CLAUDE.md` → "Skill / MCP 工具变更必须全表面同步") now carry the
+  same natural-language guidance. A future
+  `scripts/verify-extraction-prompt-parity.mjs` will gate CI on parity.
+- **`sdks/local/scripts/clean-noise-cards.mjs`** — one-shot audit tool that
+  re-runs the 0.7.3 noise filter against every active card. Cards matching
+  framework-metadata patterns are archived (not deleted; fully reversible via
+  `UPDATE knowledge_cards SET status='active'`). Supports `--dry-run` and
+  `--db PATH`. Run once per upgrade to clean up pre-0.7.3 pollution.
+- **Backend extraction prompts updated** (`extraction_v1.py`): backend is
+  zero-LLM — this file is a template the backend hands back to the client's
+  LLM. Same salience-aware framing now lives there too so cloud users see the
+  same behavior change as local users.
+
+### Synced surfaces (10 of 10 for extraction guidance)
+1. `backend/awareness/prompts/extraction_v1.py`
+2. `backend/awareness-spec.json → init_guides.write_guide`
+3. `sdks/local/src/daemon/extraction-instruction.mjs`
+4. `sdks/_shared/scripts/recall.js` (record-rule)
+5. `sdks/claudecode/scripts/harness-builder.mjs` (fallback record-rule)
+6. `sdks/awareness-memory/scripts/harness-builder.mjs` (mirror of #5)
+7. `sdks/openclaw/src/tools.ts` (workflow step 4)
+8. `sdks/claudecode/skills/save/SKILL.md`
+9. `sdks/claudecode/skills/done/SKILL.md`
+10. `sdks/_shared/prompts/extraction-salience.md` (canonical)
+
+The v2 two-pass synthesis prompt (`extraction_v2_pass2_synthesis.py`) is still
+on the legacy framing and will be synced in 0.7.4.
+
 ## [0.7.2] - 2026-04-17
 
 ### Fixed — memory recovers after 0.7.0 regression

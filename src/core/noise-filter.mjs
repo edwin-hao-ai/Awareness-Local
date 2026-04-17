@@ -18,6 +18,11 @@ const REFUSAL_MAX_CHARS = 150;
 
 // ---- B-004 Layer 1: System metadata prefixes (hard block) ------------------
 
+// 0.7.3: every prefix is tested against BOTH the raw content and a copy
+// with leading `Request:` / `Result:` / `Send:` / `Received:` wrappers
+// stripped. OpenClaw plugin shoves framework metadata inside a
+// `Request: <metadata>` envelope, which pre-0.7.3 slipped past every
+// startsWith check. See classifyNoiseEvent() below for the match order.
 const SYSTEM_METADATA_PREFIXES = [
   'Sender (untrusted metadata)',
   '<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>',
@@ -26,7 +31,16 @@ const SYSTEM_METADATA_PREFIXES = [
   '[Inter-session message]',
   'A new session was started via /new or /reset',
   '[Current project directory:',
+  'turn_brief',
+  '[turn_brief',
+  '<turn_brief',
 ];
+
+// Envelope prefixes the agent framework uses to wrap one side of a turn
+// around content that is otherwise system-metadata. Stripping these
+// before matching SYSTEM_METADATA_PREFIXES is the single source of
+// truth for the "Request: Sender (untrusted metadata)..." bug.
+const ENVELOPE_PREFIX_RE = /^\s*(?:Request|Result|Send|Received|User|Assistant|Tool)\s*:\s*/i;
 
 // ---- B-004 Layer 1: Short refusal / hallucination phrases ------------------
 
@@ -147,10 +161,19 @@ export function classifyNoiseEvent(params = {}) {
     return 'empty_content filtered';
   }
 
-  // --- B-004: System metadata prefix — hard block ---
-  for (const prefix of SYSTEM_METADATA_PREFIXES) {
-    if (trimmedRaw.startsWith(prefix)) {
-      return 'system_metadata filtered';
+  // --- B-004 / 0.7.3: System metadata prefix — hard block ---
+  // Match both the raw content and a copy with `Request:` / `Result:` /
+  // similar envelope prefixes stripped, so that
+  //   "Request: Sender (untrusted metadata): ..."
+  // is caught even though Sender(...) is not the first non-whitespace token.
+  const metaCandidates = [trimmedRaw];
+  const deEnveloped = trimmedRaw.replace(ENVELOPE_PREFIX_RE, '');
+  if (deEnveloped !== trimmedRaw) metaCandidates.push(deEnveloped);
+  for (const candidate of metaCandidates) {
+    for (const prefix of SYSTEM_METADATA_PREFIXES) {
+      if (candidate.startsWith(prefix)) {
+        return 'system_metadata filtered';
+      }
     }
   }
 
