@@ -43,6 +43,7 @@ export function buildInitResult({
   days = 7,
   maxCards = 5,
   maxTasks = 5,
+  maxSessions = 0,
   renderContextOptions = {},
 }) {
   const session = createSession(source);
@@ -51,13 +52,21 @@ export function buildInitResult({
   const recentCards = _selectRelevantCards(indexer, maxCards, focus);
   const allActiveCards = indexer.getRecentKnowledge(200);
   const openTasks = indexer.getOpenTasks(maxTasks);
-  const rawSessions = indexer.getRecentSessions(days);
 
-  let recentSessions = rawSessions.filter((sessionItem) => sessionItem.memory_count > 0 || sessionItem.summary);
-  if (recentSessions.length === 0) {
-    recentSessions = rawSessions.slice(0, 3);
+  // F-053 post-0.8.0: recent_sessions is opt-in. When `maxSessions=0` (default
+  // for new sessions), skip the recent-sessions query entirely — saves 500-1000
+  // prompt tokens of unrelated "what were we doing yesterday" noise on fresh
+  // sessions. Callers who want continuity can pass max_sessions: 3+ explicitly.
+  let recentSessions = [];
+  if (maxSessions > 0) {
+    const rawSessions = indexer.getRecentSessions(days);
+    recentSessions = rawSessions.filter((sessionItem) =>
+      sessionItem.memory_count > 0 || sessionItem.summary);
+    if (recentSessions.length === 0) {
+      recentSessions = rawSessions.slice(0, Math.min(3, maxSessions));
+    }
+    recentSessions = recentSessions.slice(0, maxSessions);
   }
-  recentSessions = recentSessions.slice(0, 5);
 
   const spec = loadSpec();
   const now = Date.now();
@@ -208,21 +217,99 @@ function _computeSignalId(sig) {
   return `sig_${sig.type}_${Math.abs(hash).toString(36)}`;
 }
 
-export async function buildRecallResult({ search, args, mode = 'local', indexer = null }) {
+/**
+ * F-053 Phase 2 · Deprecation warning limiter.
+ *
+ * Keeps per-parameter timestamps so we only warn once per hour per legacy
+ * parameter name. Prevents log spam when a legacy client makes many calls.
+ */
+const DEPRECATED_PARAMS = [
+  'semantic_query', 'keyword_query', 'scope', 'recall_mode',
+  'detail', 'ids', 'multi_level', 'cluster_expand',
+  'include_installed', 'source_exclude',
+];
+const DEPRECATION_LOG_INTERVAL_MS = 60 * 60 * 1000;
+const _deprecationLogLastAt = new Map();
+
+function _warnDeprecatedParams(args) {
+  const now = Date.now();
+  for (const key of DEPRECATED_PARAMS) {
+    if (args[key] === undefined || args[key] === null || args[key] === '') continue;
+    const last = _deprecationLogLastAt.get(key) || 0;
+    if (now - last < DEPRECATION_LOG_INTERVAL_MS) continue;
+    _deprecationLogLastAt.set(key, now);
+    console.warn(`[awareness_recall] [deprecated param used] ${key} — migrate to single-parameter \`query\` (F-053)`);
+  }
+}
+
+export async function buildRecallResult({ search, args, mode = 'local', indexer = null, getArchetypeIndex = null }) {
+  // Legacy progressive-disclosure path: detail=full + ids → expand to full content.
   if (args.detail === 'full' && args.ids?.length) {
+    _warnDeprecatedParams(args);
     const items = search
       ? await search.getFullContent(args.ids)
       : [];
     return buildRecallFullContent(items);
   }
 
-  if (!args.semantic_query && !args.keyword_query) {
+  // Resolve the effective query string, preferring the F-053 single-parameter
+  // surface (`query`) but falling back to legacy `semantic_query` / `keyword_query`.
+  const queryStr = (args.query || args.semantic_query || args.keyword_query || '').trim();
+  if (!queryStr) {
     return buildRecallNoQueryContent();
   }
 
-  const summaries = search
-    ? await search.recall(args)
-    : [];
+  const usesLegacy = !args.query && (args.semantic_query || args.keyword_query);
+  if (usesLegacy || Object.keys(args).some((k) => DEPRECATED_PARAMS.includes(k))) {
+    _warnDeprecatedParams(args);
+  }
+
+  let summaries = [];
+  if (search) {
+    if (args.query && typeof search.unifiedCascadeSearch === 'function') {
+      // Single-parameter path: daemon-driven cascade with budget-tier shaping.
+      const tokenBudget = Number.isFinite(args.token_budget) && args.token_budget > 0
+        ? args.token_budget
+        : 5000;
+      const limit = Number.isFinite(args.limit) && args.limit > 0 ? args.limit : 10;
+
+      // F-053 Phase 3 activation: auto-classify the query into an archetype
+      // (decision-why / fact-what / recall-recent / …) and pass the strategy
+      // into the cascade. Gracefully degrade to Phase 1c default when the
+      // index is unavailable or confidence is too low.
+      let strategy = null;
+      let archetype = null;
+      if (typeof getArchetypeIndex === 'function') {
+        try {
+          const index = await getArchetypeIndex();
+          if (index) {
+            const { classifyQuery } = await import('../core/query-type-router.mjs');
+            const cls = await classifyQuery(queryStr, index);
+            if (cls && cls.strategy) {
+              strategy = cls.strategy;
+              archetype = cls.archetype;
+            }
+          }
+        } catch { /* classification is a tilt, not a gate — silent fallback */ }
+      }
+
+      const out = await search.unifiedCascadeSearch(queryStr, {
+        tokenBudget,
+        limit,
+        strategy,
+      });
+      summaries = Array.isArray(out?.results) ? out.results : [];
+
+      // Annotate first item with the archetype (opaque to LLM, useful for
+      // debug logs that inspect the raw JSON envelope).
+      if (archetype && summaries.length > 0) {
+        summaries[0]._archetype = archetype;
+      }
+    } else {
+      // Legacy multi-parameter path preserved verbatim.
+      summaries = await search.recall(args);
+    }
+  }
 
   if (!summaries.length) {
     return buildRecallNoResultsContent();
@@ -231,9 +318,9 @@ export async function buildRecallResult({ search, args, mode = 'local', indexer 
   const result = buildRecallSummaryContent(summaries, mode);
 
   // Attach matching skills as recommendations (tag overlap with query terms)
-  if (indexer?.db && (args.semantic_query || args.keyword_query)) {
+  if (indexer?.db && queryStr) {
     try {
-      const matchedSkills = _findMatchingSkills(indexer.db, args.semantic_query || args.keyword_query);
+      const matchedSkills = _findMatchingSkills(indexer.db, queryStr);
       if (matchedSkills.length > 0) {
         result._matched_skills = matchedSkills;
         // Append skill hint to the text content

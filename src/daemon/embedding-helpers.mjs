@@ -68,7 +68,17 @@ export async function backfillEmbeddings(daemon) {
 export async function embedAndStore(daemon, memoryId, content) {
   if (!daemon._embedder || !content) return;
   try {
-    const language = detectNeedsCJK(content) ? 'multilingual' : 'english';
+    // Default: CJK-gated — English content uses `all-MiniLM-L6-v2` (stronger
+    // on English long-document retrieval: LongMemEval 60Q showed multilingual-
+    // e5-small drops R@5 by 7.3pp in that scenario). CJK content auto-switches
+    // to `multilingual-e5-small`. Opt-in `AWARENESS_EMBEDDER=multilingual`
+    // forces multilingual for ALL writes (useful for heavy non-English users).
+    let language;
+    if (process.env.AWARENESS_EMBEDDER === 'multilingual') {
+      language = 'multilingual';
+    } else {
+      language = detectNeedsCJK(content) ? 'multilingual' : 'english';
+    }
     const vector = await daemon._embedder.embed(content, 'passage', language);
     if (vector) {
       const modelId = daemon._embedder.MODEL_MAP?.[language] || 'all-MiniLM-L6-v2';

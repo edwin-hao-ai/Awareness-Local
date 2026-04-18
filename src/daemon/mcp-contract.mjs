@@ -129,7 +129,7 @@ export function buildRecallNoQueryContent() {
   return {
     content: [{
       type: 'text',
-      text: 'No query provided. Use semantic_query or keyword_query to search.',
+      text: 'No query provided. Pass a `query` parameter — e.g. awareness_recall({ query: "why did we pick pgvector" }).',
     }],
   };
 }
@@ -164,62 +164,87 @@ export function getToolDefinitions() {
           days: { type: 'number', description: 'Days of history to load', default: 7 },
           max_cards: { type: 'number', default: 5 },
           max_tasks: { type: 'number', default: 5 },
+          max_sessions: {
+            type: 'number',
+            default: 0,
+            description: 'How many recent-session summaries to include. Default 0 (fresh-session mode — skips "what were we doing yesterday" noise). Pass 3+ for continuity workflows.',
+          },
         },
       },
     },
     {
       name: 'awareness_recall',
       description:
-        'Search persistent memory for past decisions, solutions, and knowledge. ' +
-        'Use progressive disclosure: detail=summary first, then detail=full with ids.',
+        'Search persistent memory. Pass ONE query string — daemon picks budget, mode, and detail. ' +
+        'Example: awareness_recall({ query: "why did we pick pgvector" }).',
       inputSchema: {
         type: 'object',
         properties: {
-          semantic_query: { type: 'string', description: 'Natural language search query' },
-          keyword_query: { type: 'string', description: 'Exact keyword match' },
-          scope: { type: 'string', enum: RECALL_SCOPE_VALUES, default: 'all' },
-          recall_mode: { type: 'string', enum: RECALL_MODE_VALUES, default: 'hybrid' },
-          limit: { type: 'number', default: 10, maximum: 30 },
-          detail: {
+          query: {
             type: 'string',
-            enum: RECALL_DETAIL_VALUES,
-            default: 'summary',
-            description: 'summary = lightweight index; full = complete content for specified ids',
+            description:
+              'Natural-language query. The ONLY parameter callers need — daemon auto-routes ' +
+              'across memories + knowledge cards + workspace graph and picks the best detail level.',
           },
-          ids: { type: 'array', items: { type: 'string' }, description: 'Item IDs to expand (with detail=full)' },
+          token_budget: {
+            type: 'number',
+            description:
+              'Optional budget hint in tokens (default 5000). ≥50K → raw-heavy mix, ' +
+              '20K-50K → balanced, <20K → compressed card summaries.',
+            default: 5000,
+          },
+          limit: { type: 'number', default: 10, maximum: 30 },
+
+          // --- [DEPRECATED] Legacy multi-parameter surface (kept for compatibility) ---
+          // These still work but log a deprecation warning. Remove after 8 weeks (F-053 Phase 5).
+          semantic_query: { type: 'string', description: '[DEPRECATED] Use `query` instead.' },
+          keyword_query: { type: 'string', description: '[DEPRECATED] Use `query` instead.' },
+          scope: { type: 'string', enum: RECALL_SCOPE_VALUES, description: '[DEPRECATED] Daemon auto-scopes.' },
+          recall_mode: { type: 'string', enum: RECALL_MODE_VALUES, description: '[DEPRECATED] Daemon auto-routes.' },
+          detail: { type: 'string', enum: RECALL_DETAIL_VALUES, description: '[DEPRECATED] Budget-driven.' },
+          ids: { type: 'array', items: { type: 'string' }, description: '[DEPRECATED] Progressive disclosure — pair with detail=full.' },
           agent_role: { type: 'string' },
-          multi_level: { type: 'boolean', description: 'Enable broader context retrieval across sessions and time ranges' },
-          cluster_expand: { type: 'boolean', description: 'Enable topic-based context expansion for deeper exploration' },
-          include_installed: { type: 'boolean', description: 'Also search installed market memories', default: true },
-          source_exclude: { type: 'array', items: { type: 'string' }, description: 'Exclude memories from these sources' },
+          multi_level: { type: 'boolean', description: '[DEPRECATED] Always on.' },
+          cluster_expand: { type: 'boolean', description: '[DEPRECATED] Always on.' },
+          include_installed: { type: 'boolean', description: '[DEPRECATED] Always on.', default: true },
+          source_exclude: { type: 'array', items: { type: 'string' }, description: '[DEPRECATED]' },
         },
+        required: ['query'],
       },
     },
     {
       name: 'awareness_record',
       description:
-        'Record memories, update tasks, or submit insights. ' +
-        'Use action=remember for single records, remember_batch for bulk.',
+        'Save a memory. Pass ONE content string — daemon handles extraction asynchronously via your LLM. ' +
+        'Example: awareness_record({ content: "Today I decided to switch from Pinecone to pgvector because..." }).',
       inputSchema: {
         type: 'object',
         properties: {
+          content: {
+            type: 'string',
+            description:
+              'Memory content in markdown. The ONLY parameter callers need — daemon defaults ' +
+              'action=remember and triggers async salience-aware extraction.',
+          },
+
+          // --- [DEPRECATED] Legacy multi-parameter surface ---
           action: {
             type: 'string',
             enum: RECORD_ACTION_VALUES,
+            description: '[DEPRECATED] Defaults to "remember" when content is provided. Other actions (update_task, submit_insights, remember_batch) still require explicit action.',
           },
-          content: { type: 'string', description: 'Memory content (markdown)' },
-          title: { type: 'string', description: 'Memory title' },
-          items: { type: 'array', description: 'Batch items for remember_batch' },
-          insights: { type: 'object', description: 'Pre-extracted knowledge cards, tasks, risks' },
+          title: { type: 'string', description: 'Optional memory title (auto-generated if absent).' },
+          items: { type: 'array', description: 'Batch items for remember_batch (explicit action required).' },
+          insights: { type: 'object', description: 'Pre-extracted knowledge cards / tasks / risks.' },
           session_id: { type: 'string' },
           agent_role: { type: 'string' },
           event_type: { type: 'string' },
           tags: { type: 'array', items: { type: 'string' } },
           task_id: { type: 'string' },
           status: { type: 'string' },
-          source: { type: 'string', description: 'Client source identifier (e.g. desktop, openclaw-plugin, mcp)' },
+          source: { type: 'string', description: 'Client source identifier (e.g. desktop, openclaw-plugin, mcp).' },
         },
-        required: ['action'],
+        required: ['content'],
       },
     },
     {

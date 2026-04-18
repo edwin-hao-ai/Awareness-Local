@@ -173,12 +173,28 @@ describe('rerank (main entry)', () => {
     }
   });
 
-  it('uses fusion by default', async () => {
+  it('default is "none" (post-F-053 flip) — results pass through untouched', async () => {
+    // F-053 flipped the default from 'fusion' to 'none' after a 20Q
+    // benchmark showed fusion dropping LongMemEval R@5 from 90% to 60%.
+    // Users who want fusion must explicitly set RERANK_METHOD=fusion.
     delete process.env.RERANK_METHOD;
     const results = makeResults();
     const ranked = await rerank(results, 'test');
-    assert.ok(ranked.length > 0);
-    assert.ok(ranked[0].rerankScore !== undefined);
+    assert.equal(ranked.length, results.length);
+    assert.equal(ranked[0].rerankScore, undefined,
+      'default path must NOT attach rerankScore — it is the passthrough');
+  });
+
+  it('uses fusion when RERANK_METHOD=fusion is set explicitly', async () => {
+    process.env.RERANK_METHOD = 'fusion';
+    try {
+      const results = makeResults();
+      const ranked = await rerank(results, 'test');
+      assert.ok(ranked.length > 0);
+      assert.ok(ranked[0].rerankScore !== undefined);
+    } finally {
+      delete process.env.RERANK_METHOD;
+    }
   });
 
   it('returns unmodified results when method is none', async () => {

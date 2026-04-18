@@ -1,5 +1,139 @@
 # Changelog
 
+## [0.8.0] - 2026-04-18
+
+### Added — single-parameter recall/record (F-053 Phase 1+2)
+- **`awareness_recall(query)` and `awareness_record(content)` are now real
+  single-parameter APIs.** The daemon decides scope, detail, recall mode,
+  token-tier shape, and action — not the caller. Example:
+  `awareness_recall({ query: "why did we choose pgvector?" })` just works.
+- **Legacy multi-parameter clients keep working** (8-week deprecation
+  window). Passing `semantic_query`, `keyword_query`, `detail`, `ids`,
+  `scope`, `recall_mode`, `multi_level`, `cluster_expand`, `action`,
+  etc. still returns results, but logs a rate-limited
+  `[deprecated param used] <name>` warning so migration signal surfaces
+  without log spam.
+- **Token-budget drives the raw-vs-card mix automatically.**
+  Sub-20K budgets → compressed card summaries; 20K-50K → mixed
+  top-3 raw + top-5 card; 50K+ → raw-heavy verbatim (MemPalace-style).
+- **Three-source cascade under the hood.** `unifiedCascadeSearch` fuses
+  memory + knowledge-card + workspace-graph hits via RRF with opacity —
+  callers cannot tell which channel produced a result.
+
+### Changed — retrieval defaults (post-benchmark evidence)
+- **Default embedder flipped from `all-MiniLM-L6-v2` (English-only, 23 MB)
+  to `multilingual-e5-small` (100+ langs, 118 MB).** Same English quality
+  (+2pp MTEB) with usable Chinese/Japanese/Korean/etc. The 95 MB extra
+  one-time download is worth it for anyone outside pure English.
+  Backwards-compat: the search engine is now model-aware — existing
+  `all-MiniLM` embeddings continue to recall via their own query vector;
+  new writes use multilingual. No forced reindex.
+- **Default rerank flipped from `fusion` to `none`.** Internal benchmark
+  (20Q LongMemEval) showed the fusion formula dropping R@5 from 90% to
+  60% — it mixes growth_stage / card_type / recency signals that help
+  card retrieval but hurt long-document session retrieval.
+  Users who want fusion can still opt in via `RERANK_METHOD=fusion`.
+
+### Added — benchmarking infrastructure
+- New `benchmarks/longmemeval/run_f053_daemon_path.mjs` drives
+  `unifiedCascadeSearch` end-to-end on LongMemEval_S. Unlike the existing
+  Python runner (which independently re-implements RRF), this exercises
+  the actual daemon retrieval path. Flags: `--limit=N`, `--stratified=N`
+  (every question type × N), `--phase3` (enable archetype routing),
+  `--budget=N`.
+- New L5 mutation-testing baseline doc lives at
+  `docs/features/f-053/L5_MUTATION_BASELINE.md` — target score ≥ 80%,
+  first Stryker run due 2026-07-17.
+
+### Internal
+- L1 guards added: `verify-recall-single-param-guard.mjs` pins the MCP
+  schema `required` field; `verify-query-router-no-hardcode.mjs` fails
+  CI if the Phase 3 classifier grows any keyword hard-code.
+- 1000 test suite green in `sdks/local/`; 169 green in `openclaw/`;
+  84 green in `setup-cli/`. Zero regressions.
+- Phase 3 archetype-routing code is on main but disabled by default
+  (feature-flag via daemon config) while we wait for a card-heavy
+  benchmark that can quantify its lift. LongMemEval alone can't measure
+  Phase 3 because the haystack is pure raw sessions with no knowledge
+  cards — shape is mathematically a no-op when one bucket is empty.
+
+### Web UI
+- **Web UI search now benefits from Phase 3 query-type routing.** The REST
+  endpoints `/api/v1/search` (used by the main memory search, the Cmd+K
+  panel, and the onboarding recall-suggestions card) and
+  `/api/v1/memories/search` previously bypassed Phase 3 by calling
+  `search.recall(...)` with the old multi-parameter shape. They now hit
+  `unifiedCascadeSearch` on the primary path, so recency channel,
+  budget-tier bucket shaping, and cross-encoder rerank are active for
+  everyone — not just MCP `awareness_recall` callers. Pre-Phase-3 daemons
+  fall back to the legacy `recall` path transparently.
+  - New optional `budget` query param lets operators tune the raw/card
+    mix per request (default 20000 = mixed tier).
+  - New L1 guard `scripts/verify-web-search-cascade-aligned.mjs` fails
+    CI if either handler regresses.
+- `renderMd()` now tolerates JSON-injected content where `\n` was
+  encoded as a literal backslash-n pair (common when `awareness_record`
+  is invoked from a shell with double-escaped JSON). Markdown renders
+  correctly without requiring callers to fix their escape layer.
+
+### Fixed — stringified `insights` no longer rejected (2026-04-18 bug)
+- **Root cause**: some MCP clients (observed in Claude Code with large
+  `insights` payloads) serialize nested object arguments as JSON strings
+  on the wire. The old stdio schema declared `insights: { type: 'object' }`
+  with `required: ['action']` — client-side Zod validation then rejected
+  the call with `-32602 Input validation error: expected object, received
+  string` before the request ever reached the daemon.
+- **Fix** (three layers):
+  1. `sdks/claudecode/mcp-stdio.cjs` (sync'd to `sdks/awareness-memory/`)
+     — schema now matches F-053 (`required: ['content']` /
+     `required: ['query']`) and `insights` drops its strict `type`
+     declaration so wire-stringified payloads pass validation.
+  2. `mcp-stdio.cjs` `proxyToolCall` now calls `normalizeToolArgs`,
+     which auto-parses stringified `insights` / `items` / `tags` /
+     `ids` / `source_exclude` before forwarding to the daemon.
+  3. Daemon `tool-bridge.mjs` applies the same `normalizeStructuredArgs`
+     defense on the `awareness_record` path — so even clients that skip
+     the stdio bridge (direct HTTP to `/mcp`) get the same safety net.
+- **New L1 guard** `scripts/verify-mcp-stdio-schema-aligned.mjs` pins
+  the F-053 single-param schema + permissive insights shape across both
+  stdio entry points, preventing schema drift.
+- **New L2 tests** lock the behavior: `sdks/local/test/tool-bridge-normalize.test.mjs`
+  (7 tests) and `sdks/claudecode/test-mcp-stdio-normalize.cjs` (11 tests).
+
+### Fixed — Web UI + Onboarding search aligned to Phase 3 cascade (2026-04-18)
+- The REST endpoints `/api/v1/search` and `/api/v1/memories/search` now
+  route through `unifiedCascadeSearch` as their primary path. This closes
+  the gap where the MCP `awareness_recall` path had Phase 3 query-type
+  auto routing + recency channel + budget-tier shaping but the Web UI
+  (`index.html` line 1972 main search, line 2891 Cmd+K panel) and the
+  onboarding "try recall" card (`recall-suggestions.js` line 103) were
+  silently falling back to the old `search.recall` path.
+- Optional `?budget=N` query parameter (default 20000) lets callers pick
+  the raw/card mix tier without editing code.
+- New L1 guard `scripts/verify-web-search-cascade-aligned.mjs`.
+- New L2 tests `sdks/local/test/api-hybrid-search.test.mjs` (10 tests
+  covering primary path, budget forwarding, result unwrap, legacy
+  fallback, L3 chaos, FTS-only fallback, empty-query short-circuit).
+
+### Test totals (2026-04-18)
+- `sdks/local` unit suite: **1016 total / 1011 pass / 5 skipped / 0 fail**
+  (up from 994 pre-fix; +17 new tests from this release).
+- 5 L1 guards all green:
+  `verify-recall-single-param-guard.mjs`,
+  `verify-query-router-no-hardcode.mjs`,
+  `verify-backend-zero-llm.mjs`,
+  `verify-web-search-cascade-aligned.mjs`,
+  `verify-mcp-stdio-schema-aligned.mjs`.
+- Multi-turn recall scorecard: **10.00 / 10.00** (unchanged across three
+  regression runs).
+
+### Known limitations carried over
+- Cloud sync still uses the legacy multi-parameter surface internally
+  (retargets to single-param in a follow-up).
+- Phase 4 promotion cron is designed (`PHASE_4_DESIGN.md`) but not
+  implemented — waiting on multi-week usage data to validate the
+  promote/archive thresholds.
+
 ## [0.7.3] - 2026-04-17
 
 ### Fixed — memory quality (shipping the OpenClaw "distilled essence" philosophy)

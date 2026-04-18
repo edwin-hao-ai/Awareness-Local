@@ -154,6 +154,22 @@ function _checkCrystallizationLocal(db, newCard) {
       topic: newCard.title,
       similar_cards: similarCards,
       categories,
+      // F-053 post-0.8.0 · quality bar so the client LLM doesn't emit a
+      // thin "here is a skill" shell. Mirrors backend skill_extraction.py
+      // SYSTEM_PROMPT so both paths yield comparable skill quality.
+      instruction: [
+        'You detected 3+ similar cards on the same topic. Decide whether they',
+        'represent a genuinely REUSABLE procedure (an agent would follow these',
+        'steps on future tasks), and if yes synthesize ONE skill. Quality bar:',
+        '- name: 3-8 words, action-oriented ("Publish SDK to npm" not "npm stuff").',
+        '- summary: 200-500 chars, second-person imperative, injectable into an AI prompt verbatim. Include the WHY in one clause so the agent knows when to deviate.',
+        '- methods: ≥3 steps, each with {"step": N, "description": "..."} where description names a file / command / verification check / concrete outcome (50-200 chars per step). Vague verbs like "handle / process / manage" fail the bar.',
+        '- trigger_conditions: ≥2 distinct {"pattern": "When ...", "weight": 0-1} covering different phrasings of the same intent.',
+        '- tags: 3-8 lowercase keywords.',
+        '- source_card_ids: the IDs from similar_cards + this card.',
+        'If the cards do NOT meet the bar (e.g. they are 3 incidents of the same bug, not a reusable procedure), DO NOT invent a skill — return awareness_record with insights.skills=[] and a one-line comment. Empty is a first-class answer.',
+        'Submit via: awareness_record(content="Crystallized skill: <name>", insights={ skills: [{ name, summary, methods, trigger_conditions, tags, source_card_ids }] })',
+      ].join('\n'),
     };
   } catch (err) {
     console.warn('[AwarenessDaemon] Crystallization check failed:', err.message);
@@ -189,6 +205,12 @@ export class AwarenessLocalDaemon {
     this.cloudSync = null;
     this.httpServer = null;
     this.watcher = null;
+
+    // F-053 Phase 3 · archetype classifier index (lazy-built on first recall,
+    // then cached for daemon lifetime). Building it costs one embed per
+    // archetype (~100ms × 10 = ~1s) using the multilingual model.
+    this._archetypeIndex = null;
+    this._archetypeIndexBuildInFlight = null;
 
     // Debounce timer for fs.watch reindex
     this._reindexTimer = null;
@@ -1659,6 +1681,35 @@ ${item.description || item.title || ''}
    * Generate embedding for a memory and store it in the index.
    * Fire-and-forget — errors are logged but don't block the record flow.
    */
+  /**
+   * F-053 Phase 3 · lazy-build and cache the archetype classifier index.
+   * Returns null (not an error) when the embedder module is unavailable,
+   * so recall gracefully falls back to Phase 1c budget-tier default.
+   *
+   * Thread-safety: if two recalls race in parallel on a cold daemon, the
+   * in-flight promise is shared so we don't double-embed the archetypes.
+   */
+  async _ensureArchetypeIndex() {
+    if (this._archetypeIndex) return this._archetypeIndex;
+    if (this._archetypeIndexBuildInFlight) return this._archetypeIndexBuildInFlight;
+
+    this._archetypeIndexBuildInFlight = (async () => {
+      try {
+        if (!this._embedder) return null;
+        const { buildArchetypeIndex } = await import('./core/query-type-router.mjs');
+        this._archetypeIndex = await buildArchetypeIndex({
+          embed: (t, type, lang) => this._embedder.embed(t, type, lang),
+        });
+        return this._archetypeIndex;
+      } catch {
+        return null;
+      } finally {
+        this._archetypeIndexBuildInFlight = null;
+      }
+    })();
+    return this._archetypeIndexBuildInFlight;
+  }
+
   async _embedAndStore(memoryId, content) {
     return embedAndStore(this, memoryId, content);
   }

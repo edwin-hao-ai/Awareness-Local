@@ -904,10 +904,18 @@ function esc(s) { if (!s) return ''; return s.replace(/&/g,'&amp;').replace(/</g
 function escJs(s) { if (!s) return ''; return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 /** Lightweight Markdown→HTML renderer. Zero dependencies.
- *  Supports: headings, bold, italic, inline code, code blocks, links, lists, hr, blockquotes, paragraphs. */
+ *  Supports: headings, bold, italic, inline code, code blocks, links, lists, hr, blockquotes, paragraphs.
+ *  Robust against JSON-injected content where `\n` was encoded as a literal
+ *  two-character sequence (backslash + n) rather than a real newline — a
+ *  common artifact when `awareness_record` is called from shell scripts that
+ *  double-escape JSON strings. We only unescape when NO real newline is
+ *  present, so already-clean Markdown passes through untouched. */
 function renderMd(raw) {
   if (!raw) return '';
-  const s = raw.replace(/\r\n/g, '\n');
+  let s = String(raw).replace(/\r\n/g, '\n');
+  if (!s.includes('\n') && /\\n/.test(s)) {
+    s = s.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+  }
   let html = '';
   let inCodeBlock = false;
   let codeBlockContent = '';

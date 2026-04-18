@@ -258,14 +258,31 @@ export function apiListMemories(daemon, _req, res, url) {
   return jsonResponse(res, { items: rows, total, limit, offset });
 }
 
-export function apiSearchMemories(daemon, _req, res, url) {
+export async function apiSearchMemories(daemon, _req, res, url) {
   const q = url.searchParams.get('q') || '';
   const limit = parseInt(url.searchParams.get('limit') || '20', 10);
+  const budget = parseInt(url.searchParams.get('budget') || '20000', 10);
 
-  if (!q || !daemon.indexer) {
+  if (!q) {
     return jsonResponse(res, { items: [], total: 0, query: q });
   }
 
+  // F-053 Phase 3 · primary path: unifiedCascadeSearch gives query-type
+  // routing, recency channel, budget-tier shaping, and cross-encoder rerank.
+  if (daemon.search && typeof daemon.search.unifiedCascadeSearch === 'function') {
+    try {
+      const out = await daemon.search.unifiedCascadeSearch(q, { tokenBudget: budget, limit });
+      const items = Array.isArray(out?.results) ? out.results : Array.isArray(out) ? out : [];
+      return jsonResponse(res, { items, total: items.length, query: q });
+    } catch (err) {
+      console.error('[api] /memories/search cascade error:', err.message);
+    }
+  }
+
+  // FTS-only last-resort fallback for daemons without the search module.
+  if (!daemon.indexer) {
+    return jsonResponse(res, { items: [], total: 0, query: q });
+  }
   const results = daemon.indexer.search(q, { limit });
   return jsonResponse(res, { items: results, total: results.length, query: q });
 }
@@ -998,6 +1015,7 @@ export function apiTimeline(daemon, _req, res, url) {
 export async function apiHybridSearch(daemon, _req, res, url) {
   const q = url.searchParams.get('q') || '';
   const limit = parseInt(url.searchParams.get('limit') || '20', 10);
+  const budget = parseInt(url.searchParams.get('budget') || '20000', 10);
   const scope = url.searchParams.get('scope') || 'all';
 
   if (!q) {
@@ -1005,6 +1023,20 @@ export async function apiHybridSearch(daemon, _req, res, url) {
   }
 
   if (daemon.search) {
+    // F-053 Phase 3 · primary path: unifiedCascadeSearch applies query-type
+    // routing (recall-recent / concept / default), recency channel, budget-tier
+    // bucket shaping, and cross-encoder rerank. Web UI + onboarding must hit
+    // this path so they match the MCP `awareness_recall` behavior.
+    if (typeof daemon.search.unifiedCascadeSearch === 'function') {
+      try {
+        const out = await daemon.search.unifiedCascadeSearch(q, { tokenBudget: budget, limit });
+        const items = Array.isArray(out?.results) ? out.results : Array.isArray(out) ? out : [];
+        return jsonResponse(res, { items, total: items.length, query: q });
+      } catch (err) {
+        console.error('[api] unified cascade search error:', err.message);
+      }
+    }
+    // Legacy fallback for pre-Phase-3 daemon builds (no unifiedCascadeSearch).
     try {
       const results = await daemon.search.recall({
         semantic_query: q,
@@ -1016,7 +1048,7 @@ export async function apiHybridSearch(daemon, _req, res, url) {
       });
       return jsonResponse(res, { items: results, total: results.length, query: q });
     } catch (err) {
-      console.error('[api] hybrid search error:', err.message);
+      console.error('[api] hybrid search recall fallback error:', err.message);
     }
   }
 

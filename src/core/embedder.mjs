@@ -198,7 +198,7 @@ async function _loadPipeline(modelId) {
 /**
  * Lazy-load (and cache) the embedding pipeline for the given language.
  *
- * @param {string} [language='english'] — 'english' | 'multilingual'
+ * @param {string} [language='english'] — 'english' (default, MiniLM, stronger on English retrieval) | 'multilingual' (e5-small, 100+ langs)
  * @returns {Promise<Function|null>} — the HF pipeline function, or null if unavailable.
  */
 export async function getEmbedder(language = 'english') {
@@ -236,7 +236,7 @@ export async function isEmbeddingAvailable() {
  *
  * @param {string} text
  * @param {string} [type='passage'] — 'query' | 'passage' (affects e5 prefix).
- * @param {string} [language='english'] — 'english' | 'multilingual'.
+ * @param {string} [language='english'] — 'english' (default, MiniLM, stronger on English retrieval) | 'multilingual' (e5-small, 100+ langs).
  * @returns {Promise<Float32Array>} — 384-dimensional normalised vector.
  * @throws {Error} if embedding is unavailable.
  */

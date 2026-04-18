@@ -17,6 +17,45 @@ const KNOWN_TOOLS = new Set([
   'awareness_workspace_search',
 ]);
 
+// F-053 post-0.8.0 defensive normalize: some MCP clients (incl. older
+// versions of Claude Code's stdio bridge) serialize nested object/array
+// arguments to JSON strings on the wire. Rather than reject the call with
+// an opaque "expected object, received string" validation error, normalize
+// stringified values back to their native form before the handler sees
+// them. This makes the daemon Postel-liberal: accept common client bugs,
+// emit structured output.
+const STRUCTURED_ARG_FIELDS = ['insights', 'items', 'tags', 'ids', 'source_exclude'];
+
+function tryParseJson(value) {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (!trimmed) return value;
+  const first = trimmed[0];
+  if (first !== '{' && first !== '[') return value;
+  try { return JSON.parse(trimmed); }
+  catch { return value; }
+}
+
+function normalizeStructuredArgs(args) {
+  if (!args || typeof args !== 'object') return args || {};
+  let mutated = false;
+  const out = { ...args };
+  for (const field of STRUCTURED_ARG_FIELDS) {
+    if (!(field in out)) continue;
+    const original = out[field];
+    const parsed = tryParseJson(original);
+    if (parsed !== original) {
+      out[field] = parsed;
+      mutated = true;
+    }
+  }
+  if (mutated) {
+    // eslint-disable-next-line no-console
+    console.warn('[awareness_record] normalized stringified structured args — client wire layer may be serializing nested objects');
+  }
+  return out;
+}
+
 function trackToolCall(name, success) {
   track('mcp_tool_called', { tool_name: name, success });
 }
@@ -40,6 +79,12 @@ export async function callMcpTool(daemon, name, args) {
 
     switch (name) {
       case 'awareness_init': {
+        // F-053 post-0.8.0: `max_sessions` defaults to 0 for new sessions so
+        // the init payload carries only focus-relevant cards + tasks + perception
+        // + user prefs, not the noisy "what were we doing yesterday" summary.
+        // Callers who actively want continuity can opt in with max_sessions:3+.
+        // Rationale: on a fresh session the prior-session summaries eat 500-1000
+        // prompt tokens without helping the user's new task.
         const initResult = buildInitResult({
           createSession: (source) => daemon._createSession(source),
           indexer: daemon.indexer,
@@ -48,6 +93,7 @@ export async function callMcpTool(daemon, name, args) {
           days: args.days ?? 7,
           maxCards: args.max_cards ?? 5,
           maxTasks: args.max_tasks ?? 0,
+          maxSessions: args.max_sessions ?? 0,
           renderContextOptions: {
             localUrl: `http://localhost:${daemon.port}`,
             currentFocus: args.query,
@@ -63,27 +109,34 @@ export async function callMcpTool(daemon, name, args) {
           search: daemon.search,
           args,
           indexer: daemon.indexer,
+          getArchetypeIndex: () => daemon._ensureArchetypeIndex(),
         });
         break;
       }
 
       case 'awareness_record': {
+        // F-053 Phase 2 · Default action=remember when caller passes only `content`.
+        // Keeps explicit-action surface (remember_batch, update_task, submit_insights)
+        // fully functional for legacy clients.
+        const recordArgs = normalizeStructuredArgs(args);
+        const action = recordArgs.action
+          || (typeof recordArgs.content === 'string' && recordArgs.content ? 'remember' : undefined);
         let recordResult;
-        switch (args.action) {
+        switch (action) {
           case 'remember':
-            recordResult = await daemon._remember(args);
+            recordResult = await daemon._remember(recordArgs);
             break;
           case 'remember_batch':
-            recordResult = await daemon._rememberBatch(args);
+            recordResult = await daemon._rememberBatch(recordArgs);
             break;
           case 'update_task':
-            recordResult = await daemon._updateTask(args);
+            recordResult = await daemon._updateTask(recordArgs);
             break;
           case 'submit_insights':
-            recordResult = await daemon._submitInsights(args);
+            recordResult = await daemon._submitInsights(recordArgs);
             break;
           default:
-            recordResult = { error: `Unknown action: ${args.action}` };
+            recordResult = { error: `awareness_record requires \`content\` (default action=remember) or an explicit \`action\`` };
         }
         result = mcpResult(recordResult);
         break;

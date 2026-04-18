@@ -40,7 +40,11 @@ const LLM_RERANK_TIMEOUT_MS = parseInt(process.env.LLM_RERANK_TIMEOUT_MS || '500
  * @returns {"fusion"|"llm"|"none"}
  */
 export function getRerankMethod() {
-  return (process.env.RERANK_METHOD || 'fusion').toLowerCase();
+  // F-053 default flipped from 'fusion' to 'none' after a 20Q benchmark
+  // showed fusion dropping LongMemEval R@5 from 90% to 60% — it mixes in
+  // growth_stage / card_type dimensions that hurt session-level retrieval.
+  // Users can still opt into fusion or LLM rerank via RERANK_METHOD.
+  return (process.env.RERANK_METHOD || 'none').toLowerCase();
 }
 
 /**

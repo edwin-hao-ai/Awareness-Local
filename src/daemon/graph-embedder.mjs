@@ -128,9 +128,13 @@ export async function embedGraphNodes(daemon, options = {}) {
     }
 
     try {
-      // Detect language from first text in batch (most texts in a project share language)
+      // Default: CJK-gated — matches embedding-helpers.mjs so graph nodes
+      // and memories agree on model choice for each language. Honour
+      // AWARENESS_EMBEDDER=multilingual opt-in for heavy non-English users.
       const sampleText = validTexts.slice(0, 3).join(' ');
-      const language = detectNeedsCJK(sampleText) ? 'multilingual' : 'english';
+      const language = process.env.AWARENESS_EMBEDDER === 'multilingual'
+        ? 'multilingual'
+        : (detectNeedsCJK(sampleText) ? 'multilingual' : 'english');
       const modelId = daemon._embedder.MODEL_MAP?.[language] || 'all-MiniLM-L6-v2';
 
       const vectors = await daemon._embedder.embedBatch(validTexts, 'passage', language);
