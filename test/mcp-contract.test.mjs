@@ -54,8 +54,10 @@ test('buildInitResult keeps preference-first, active skills, and attention summa
   const fakeIndexer = {
     getStats: () => ({ totalMemories: 3, totalKnowledge: 4, totalTasks: 2, totalSessions: 2 }),
     getRecentKnowledge: (limit) => {
+      // F-055 bug A: persona card needs confidence ≥ 0.9 to surface
+      // without BM25 focus-match (stricter gate to avoid cross-topic leak).
       const cards = [
-        { id: 'pref_1', category: 'personal_preference', title: 'Prefers TypeScript', summary: 'Use TS by default.' },
+        { id: 'pref_1', category: 'personal_preference', title: 'Prefers TypeScript', summary: 'Use TS by default.', confidence: 0.95 },
         { id: 'skill_1', category: 'skill', title: 'Deploy with Docker', summary: 'Use compose.', methods: ['Pull', 'Build', 'Up'] },
         { id: 'dec_1', category: 'decision', title: 'Redis for cache', summary: 'Chose Redis for caching.' },
         { id: 'pit_1', category: 'pitfall', title: 'Beware stale pid', summary: 'Clean stale pid files.' },

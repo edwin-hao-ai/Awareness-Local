@@ -24,7 +24,17 @@ import { QmdRetrievalBackend, QMD_RESULT_PREFIX } from './retrieval-backends/qmd
 // ---------------------------------------------------------------------------
 
 /** RRF smoothing constant — standard value from the literature */
-const RRF_K = 60;
+// F-059 · default lowered from 60 → 10 after the 2026-04-19 RRF sweep
+// showed k=10 lifts Recall@3 from 83% → 100%, MRR 0.725 → 0.778, and
+// NDCG@3 0.722 → 0.835 on a 12-card / 12-query corpus. Small k gives
+// top-ranked results a steeper RRF contribution (1/11 vs 1/61), which
+// matters more on small limits (our default limit=5-10) where a single
+// strong channel hit shouldn't be diluted by mid-pack ties in the other
+// channel. The classic k=60 value is tuned for large TREC-scale runs;
+// personal memory corpora skew much smaller.
+const RRF_K = Number.isFinite(Number(process.env.AWARENESS_RRF_K)) && Number(process.env.AWARENESS_RRF_K) > 0
+  ? Number(process.env.AWARENESS_RRF_K)
+  : 10;
 
 /** Time decay half-life in days (score halves every 30 days) */
 const DECAY_HALF_LIFE_DAYS = 30;
@@ -60,6 +70,25 @@ const TYPE_BOOST = {
 
 /** Types excluded from recall results by default (raw conversation noise). */
 const DEFAULT_TYPE_EXCLUDE = new Set(['session_checkpoint']);
+
+/**
+ * F-055 bug C · score penalties for auto-generated aggregator pages.
+ *
+ * `workspace_wiki` and `wiki_concept` bundle children titles + tags into
+ * their own embedding, so they beat source cards on Top1 more often than
+ * they should. A small negative offset rebalances: original cards win
+ * direct-hit queries, aggregators still show up in Top3-5 for browse
+ * intents (keyword contains "concepts", "wiki", etc.).
+ */
+const TYPE_AGGREGATOR_PENALTY = {
+  workspace_wiki: -0.10,
+  wiki_concept: -0.10,
+};
+
+function _aggregatorPenaltyForType(type) {
+  if (!type) return 0;
+  return TYPE_AGGREGATOR_PENALTY[type] ?? 0;
+}
 
 /**
  * F-053 Phase 1c · Card-vs-raw discriminator for budget-tier shaping.
@@ -98,8 +127,10 @@ const CJK_TECH_TERMS = [
   ['部署', 'deploy deployment'],
   ['配置', 'config configuration'],
   ['记忆', 'memory'],
+  ['记录', 'record'],
   ['召回', 'recall retrieval'],
   ['搜索', 'search'],
+  ['查询', 'query'],
   ['知识', 'knowledge'],
   ['卡片', 'card'],
   ['分类', 'category classification'],
@@ -120,6 +151,36 @@ const CJK_TECH_TERMS = [
   ['权限', 'permission'],
   ['工作流', 'workflow'],
   ['类型', 'type'],
+  // F-059 phase 3 · everyday high-frequency words caught out by
+  // short dict. Missing these meant queries like "怎么写高质量内容"
+  // dropped below top-3 even when FTS had the card.
+  ['写', 'write writing'],
+  ['内容', 'content'],
+  ['高质量', 'high quality'],
+  ['质量', 'quality'],
+  ['详细', 'detailed detail'],
+  ['文档', 'document docs'],
+  ['字段', 'field'],
+  ['方法', 'method'],
+  ['函数', 'function'],
+  ['进化', 'evolve evolution'],
+  ['成长', 'growth grow'],
+  ['升级', 'upgrade'],
+  ['版本', 'version'],
+  ['发布', 'publish release'],
+  ['注入', 'inject injection'],
+  ['偏好', 'preference prefer'],
+  ['任务', 'task'],
+  ['风险', 'risk'],
+  ['链路', 'pipeline chain'],
+  ['端到端', 'end-to-end e2e'],
+  ['容器', 'container'],
+  ['启动', 'start startup'],
+  ['关闭', 'close shutdown'],
+  ['自动', 'auto automatic'],
+  ['检测', 'detect detection'],
+  ['重启', 'restart'],
+  ['迁移', 'migrate migration'],
 ];
 
 // ---------------------------------------------------------------------------
@@ -181,6 +242,7 @@ export class SearchEngine {
       cluster_expand = false,
       include_installed = true,
       current_source,   // caller's source identifier (e.g. 'claude-code', 'openclaw-plugin')
+      hyde_hint,        // F-060 · client-generated hypothetical answer (HyDE)
     } = params;
 
     // Fire-and-forget telemetry for recall mode usage analytics
@@ -194,11 +256,16 @@ export class SearchEngine {
       return this.getFullContent(ids);
     }
 
-    // CJK cross-language expansion: if query is primarily CJK, also search in English
-    // This helps because ~75% of memories are in English even for Chinese-speaking users.
+    // CJK cross-language expansion: if query contains ANY substantial CJK
+    // run, also search in English. Previously required 30% dominance which
+    // missed mixed queries like `awareness_record 怎么写高质量内容` (27%
+    // CJK due to long English identifier) even though the CJK portion
+    // clearly asks "how to write high quality content".
     const cjkChars = (semantic_query || '').match(/[\u4e00-\u9fff\u3400-\u4dbf]/g);
+    const cjkRuns = (semantic_query || '').match(/[\u4e00-\u9fff\u3400-\u4dbf]{3,}/g);
     const isCjkDominant = cjkChars && cjkChars.length > (semantic_query || '').length * 0.3;
-    const expandedKeyword = isCjkDominant
+    const hasCjkRun = cjkRuns && cjkRuns.length > 0;
+    const expandedKeyword = (isCjkDominant || hasCjkRun)
       ? this._expandCjkToEnglish(keyword_query || semantic_query || '')
       : keyword_query;
 
@@ -241,6 +308,11 @@ export class SearchEngine {
       include_installed,
       token_budget: params.token_budget,
     });
+    // F-060 · HyDE is a pure embed-input override; planner doesn't know
+    // about it, so splice it on after plan() so searchLocal sees it.
+    if (typeof hyde_hint === 'string' && hyde_hint.trim().length >= 20) {
+      normalizedParams.hyde_hint = hyde_hint.trim();
+    }
 
     // Dual-channel: local (always) + cloud (optional, with timeout protection)
     const [localResults, cloudResults] = await Promise.all([
@@ -263,8 +335,9 @@ export class SearchEngine {
       }
     }
 
-    // CJK cross-language boost: run additional English search if CJK dominant
-    if (isCjkDominant && expandedKeyword && expandedKeyword !== keyword_query) {
+    // CJK cross-language boost: run additional English search if ANY
+    // substantial CJK run is present (was: 30% dominance gate).
+    if ((isCjkDominant || hasCjkRun) && expandedKeyword && expandedKeyword !== keyword_query) {
       try {
         const engParams = { ...normalizedParams, semantic_query: expandedKeyword, keyword_query: expandedKeyword };
         const engResults = await this.searchLocal(engParams);
@@ -403,6 +476,7 @@ export class SearchEngine {
       cluster_expand: true,
       include_installed: true,
       token_budget: tokenBudget,
+      hyde_hint: opts.hyde_hint,  // F-060 · passthrough
     })).catch(() => []);
 
     // Channel 2 · graph_nodes FTS (direct workspace/wiki/doc/symbol hits,
@@ -457,6 +531,23 @@ export class SearchEngine {
       ],
       pull,
     );
+
+    // F-055 bug C · aggregator-type penalty. `workspace_wiki` and
+    // `wiki_concept` pages are auto-generated aggregators that concatenate
+    // titles + tags from multiple source cards, which makes their embeddings
+    // artificially "full" on any topic covered by their children. Without
+    // a penalty they occasionally beat the original source card on Top1
+    // (observed 2026-04-18: "清汤牛肉面" query → aggregator 36% > recipe card
+    // 34%). A small negative score offset lets original cards regain Top1
+    // for direct-hit queries while aggregators still surface in Top3-5 for
+    // concept-browsing queries.
+    for (const item of fused) {
+      const penalty = _aggregatorPenaltyForType(item.type);
+      if (penalty !== 0) {
+        item.rrfScore = (item.rrfScore ?? 0) + penalty;
+      }
+    }
+    fused.sort((a, b) => (b.rrfScore ?? 0) - (a.rrfScore ?? 0));
 
     // F-053 Phase 3 · recency-primary ranking for recall-recent archetype.
     // When the classifier detects a "what did we just discuss / continue
@@ -642,7 +733,7 @@ export class SearchEngine {
   }
 
   async _searchLocalBuiltin(params) {
-    const { semantic_query, keyword_query, scope, recall_mode, limit, agent_role } = params;
+    const { semantic_query, keyword_query, scope, recall_mode, limit, agent_role, hyde_hint } = params;
 
     const ftsQuery = this.buildFtsQuery(semantic_query, keyword_query);
     const searchOpts = { limit: limit * 2, agent_role };
@@ -654,11 +745,20 @@ export class SearchEngine {
     }
 
     // Channel 2: Embedding cosine similarity (~10ms typical)
+    // F-060 · if the client provided a HyDE hint (a hypothetical answer
+    // synthesised by the caller's own LLM), prefer it as the embed input.
+    // Hypothetical answers sit in the same semantic space as card
+    // summaries, so they bridge the query-vs-document gap better than
+    // the raw query. Raw query is still used for FTS5 so keyword hits
+    // aren't lost. HyDE is purely opt-in; daemon never calls an LLM.
+    const embedInput = (typeof hyde_hint === 'string' && hyde_hint.trim().length >= 20)
+      ? hyde_hint.trim()
+      : (semantic_query || keyword_query);
     let embeddingResults = [];
-    if (recall_mode !== 'keyword' && this.embedder && (semantic_query || keyword_query)) {
+    if (recall_mode !== 'keyword' && this.embedder && embedInput) {
       try {
         embeddingResults = await this._embeddingSearch(
-          semantic_query || keyword_query,
+          embedInput,
           scope,
           searchOpts,
         );
@@ -1171,8 +1271,14 @@ export class SearchEngine {
   async _embeddingSearch(queryText, scope, opts) {
     const isCJK = detectNeedsCJK(queryText);
 
-    // Retrieve all stored embeddings from the indexer (includes model_id)
-    const allEmbeddings = this.indexer.getAllEmbeddings?.(scope) || [];
+    // Retrieve all stored embeddings from the indexer (memory + card tables).
+    // F-059: knowledge_cards populated via submit_insights now cache their
+    // own embeddings in the `card_embeddings` table; merging them here gives
+    // the semantic channel full corpus coverage (previously memory-only).
+    const memoryEmbs = this.indexer.getAllEmbeddings?.(scope) || [];
+    const cardEmbs = this.indexer.getAllCardEmbeddings?.() || [];
+    const allEmbeddings = [...memoryEmbs, ...cardEmbs];
+    if (process.env.DEBUG_RECALL) console.log(`[_embeddingSearch] q="${queryText.slice(0,50)}" mem=${memoryEmbs.length} card=${cardEmbs.length} scope=${scope}`);
     if (allEmbeddings.length === 0) return [];
 
     // Determine which models have stored embeddings
@@ -1218,6 +1324,7 @@ export class SearchEngine {
 
     // Sort by similarity descending, take top-K
     scored.sort((a, b) => b.embeddingScore - a.embeddingScore);
+    if (process.env.DEBUG_RECALL) console.log(`[_embeddingSearch] top3: ${scored.slice(0,3).map(s => `${s.id.slice(0,20)}=${s.embeddingScore.toFixed(3)}`).join(' | ')}`);
     return scored.slice(0, opts.limit || 10);
   }
 

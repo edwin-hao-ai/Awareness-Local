@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { validateTaskQuality, checkTaskDedup } from './lifecycle-manager.mjs';
+import { validateTaskQuality, checkTaskDedup, validateCardQuality } from './lifecycle-manager.mjs';
 
 // 0.7.3: salience post-process floors. The extraction prompt (see
 // sdks/_shared/prompts/extraction-salience.md) instructs the client LLM
@@ -518,6 +518,23 @@ export class KnowledgeExtractor {
    * @returns {Promise<string>} Filepath of the written card
    */
   async saveCard(card) {
+    // F-058 bug B — the rule-based extractor path (extractByRules) bypassed
+    // the F-055 R1-R5 quality gate, polluting the card store with
+    // summary=title, <80-char, envelope-leaked cards. Apply the same gate
+    // here so BOTH LLM-submitted and daemon-internal paths reject noise.
+    const gate = validateCardQuality(card);
+    if (!gate.ok) {
+      console.warn(
+        `[knowledge-extractor] Rejected rule-based card (${gate.reasons.join(', ')}): ${(card?.title || '').substring(0, 60)}`,
+      );
+      return null;
+    }
+    if (gate.warnings.length > 0) {
+      console.warn(
+        `[knowledge-extractor] Accepted with warnings (${gate.warnings.join(', ')}): ${(card?.title || '').substring(0, 60)}`,
+      );
+    }
+
     const categoryDir = this._categoryToDir(card.category);
     const filename = this._buildFilename(card.title, card.id);
     const filepath = path.join(categoryDir, filename);

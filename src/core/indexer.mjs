@@ -100,6 +100,28 @@ CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(
   tokenize='trigram'
 );
 
+-- F-059 · cached task embeddings so lifecycle-manager's auto-resolve
+-- has a real vector channel instead of Jaccard proxy. Populated on
+-- indexTask when the daemon's embedder is loaded; cleaned on task close.
+CREATE TABLE IF NOT EXISTS task_embeddings (
+  task_id TEXT PRIMARY KEY,
+  vector BLOB NOT NULL,
+  model_id TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+-- F-059 card embeddings for the semantic retrieval channel. Previously
+-- only raw memories were embedded; cards (from submit_insights) showed
+-- up only via FTS5 BM25 — cross-language paraphrases missed entirely.
+-- Separate table from the embeddings table (which FKs to memories) so
+-- card IDs do not need a shadow memory row.
+CREATE TABLE IF NOT EXISTS card_embeddings (
+  card_id TEXT PRIMARY KEY,
+  vector BLOB NOT NULL,
+  model_id TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   source TEXT,
@@ -436,6 +458,10 @@ export class Indexer {
       'ALTER TABLE memories ADD COLUMN sync_status TEXT DEFAULT \'pending_push\'',
       'ALTER TABLE memories ADD COLUMN last_pushed_at TEXT',
       'ALTER TABLE memories ADD COLUMN last_pulled_at TEXT',
+      // F-059 · reverse link from card to skills that reference it, so
+      //         hydrating a card shows "Related skills: [...]" without a
+      //         reverse scan of every skill's source_card_ids.
+      'ALTER TABLE knowledge_cards ADD COLUMN linked_skill_ids TEXT',
       'ALTER TABLE knowledge_cards ADD COLUMN cloud_id TEXT',
       'ALTER TABLE knowledge_cards ADD COLUMN version INTEGER DEFAULT 1',
       'ALTER TABLE knowledge_cards ADD COLUMN schema_version INTEGER DEFAULT 1',
@@ -543,6 +569,12 @@ export class Indexer {
     const migrations = [
       'ALTER TABLE skills ADD COLUMN confidence REAL DEFAULT 1.0',
       'ALTER TABLE skills ADD COLUMN consecutive_failures INTEGER DEFAULT 0',
+      // F-059 · skill growth stage mirrors cards. Evergreen skills lead
+      // active_skills TOC; budding/seedling are still recalled but
+      // weighted lower in ranking (no hard filter — user preference).
+      "ALTER TABLE skills ADD COLUMN growth_stage TEXT DEFAULT 'seedling'",
+      'ALTER TABLE skills ADD COLUMN pitfalls TEXT',
+      'ALTER TABLE skills ADD COLUMN verification TEXT',
     ];
     for (const sql of migrations) {
       try { this.db.exec(sql); } catch { /* column already exists */ }
@@ -1147,6 +1179,34 @@ Return ONLY JSON: {"title": "...", "summary": "..."}`;
     } catch {
       // tasks_fts may not exist on older DBs — non-fatal
     }
+
+    // F-059 · cached task embedding so auto-resolve has a real vector
+    // channel. Fire-and-forget — absence of embedder / closed task just
+    // skips the cache write.
+    if (task.status !== 'open') {
+      try { this.db.prepare('DELETE FROM task_embeddings WHERE task_id = ?').run(task.id); } catch {}
+    } else if (this._embedder?.embed) {
+      const text = `${task.title || ''} ${task.description || ''}`.substring(0, 400);
+      Promise.resolve(this._embedder.embed(text, 'passage'))
+        .then((vec) => {
+          if (!vec || !vec.buffer) return;
+          const buf = Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
+          try {
+            this.db
+              .prepare('INSERT OR REPLACE INTO task_embeddings (task_id, vector, model_id, created_at) VALUES (?, ?, ?, ?)')
+              .run(task.id, buf, this._embedder.modelId || 'Xenova/all-MiniLM-L6-v2', nowISO());
+          } catch { /* non-fatal */ }
+        })
+        .catch(() => { /* non-fatal */ });
+    }
+  }
+
+  /**
+   * Inject the embedder so indexTask can cache task vectors. Called by
+   * the daemon after _loadEmbedder resolves.
+   */
+  setEmbedder(embedder) {
+    this._embedder = embedder;
   }
 
   // -----------------------------------------------------------------------
@@ -1816,6 +1876,45 @@ Return ONLY JSON: {"title": "...", "summary": "..."}`;
       model_id: modelId,
       created_at: nowISO(),
     });
+  }
+
+  /**
+   * F-059 · store an embedding for a knowledge card. Separate table from
+   * `embeddings` (which FK's to memories) so card IDs don't need a
+   * shadow memory row.
+   */
+  storeCardEmbedding(cardId, vector, modelId) {
+    const buf = Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
+    try {
+      this.db
+        .prepare('INSERT OR REPLACE INTO card_embeddings (card_id, vector, model_id, created_at) VALUES (?, ?, ?, ?)')
+        .run(cardId, buf, modelId, nowISO());
+    } catch (err) {
+      // Table may not exist on pre-F-059 DBs — non-fatal
+    }
+  }
+
+  /**
+   * F-059 · retrieve all card embeddings for the semantic channel.
+   * Returns rows shaped like getAllEmbeddings() so search.mjs can
+   * treat them uniformly.
+   */
+  getAllCardEmbeddings() {
+    try {
+      const rows = this.db
+        .prepare('SELECT card_id AS id, vector, model_id FROM card_embeddings')
+        .all();
+      return rows.map((row) => ({
+        id: row.id,
+        memory_id: row.id,  // shape parity with getAllEmbeddings
+        model_id: row.model_id || '',
+        vector: new Float32Array(
+          row.vector.buffer,
+          row.vector.byteOffset,
+          row.vector.byteLength / Float32Array.BYTES_PER_ELEMENT,
+        ),
+      }));
+    } catch { return []; }
   }
 
   /**

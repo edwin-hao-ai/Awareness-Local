@@ -127,7 +127,7 @@ test('detectGuardSignals keeps repo-specific guards disabled by default', () => 
   assert.equal(signals.length, 0);
 });
 
-test('daemon perception surfaces guard before related contradiction signals', () => {
+test('daemon perception surfaces guard before related contradiction signals', async () => {
   const sample = getCase('signal-001');
   const daemon = createDaemon({
     searchKnowledge() {
@@ -145,7 +145,7 @@ test('daemon perception surfaces guard before related contradiction signals', ()
     decisions: [],
   });
 
-  const signals = daemon._buildPerception(
+  const signals = await daemon._buildPerception(
     sample.input_event.content,
     sample.input_event.title,
     { tags: sample.input_event.tags },
@@ -157,7 +157,7 @@ test('daemon perception surfaces guard before related contradiction signals', ()
   assert.equal(signals[0].must_block, true);
 });
 
-test('daemon perception keeps pattern and resonance fixture without false guard', () => {
+test('daemon perception keeps pattern and resonance fixture without false guard', async () => {
   const sample = getCase('signal-002');
   const daemon = createDaemon({
     searchKnowledge(query) {
@@ -187,7 +187,7 @@ test('daemon perception keeps pattern and resonance fixture without false guard'
     ],
   });
 
-  const signals = daemon._buildPerception(
+  const signals = await daemon._buildPerception(
     sample.input_event.content,
     sample.input_event.title,
     { tags: sample.input_event.tags },

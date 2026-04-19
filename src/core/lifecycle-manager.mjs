@@ -12,6 +12,9 @@
  * Target: <30ms total.
  */
 
+import { PERSONAL_CARD_CATEGORIES } from '../daemon/constants.mjs';
+import { validateCardQuality as _validateCardQuality } from '../_shared/card-quality-validate.mjs';
+
 // Thresholds
 const RISK_MITIGATE_RANK_THRESHOLD = -5.0;
 const TASK_RESOLVE_BM25_THRESHOLD = -5.0;    // BM25 rank threshold for task auto-resolve (same as risks)
@@ -147,6 +150,18 @@ export function checkTaskDedup(indexer, taskTitle) {
   return { isDuplicate: false };
 }
 
+// ---------------------------------------------------------------------------
+// F-055 bug D — Knowledge card quality validator
+// ---------------------------------------------------------------------------
+// Thin wrapper over the shared implementation in `../_shared/card-quality-validate.mjs`
+// (synced from SSOT at `sdks/_shared/js/card-quality-validate.mjs`).
+// This SDK passes its own PERSONAL_CARD_CATEGORIES constant so the category
+// list stays in sync with daemon/constants.mjs.
+
+export function validateCardQuality(card) {
+  return _validateCardQuality(card, { personalCategories: PERSONAL_CARD_CATEGORIES });
+}
+
 /**
  * Validate task quality before creation.
  * Returns rejection reason or null if acceptable.
@@ -225,27 +240,40 @@ function _autoResolveTasks(indexer, content, title, contentVector = null, cosine
     }
   }
 
-  // --- Channel 2: Embedding cosine similarity ---
+  // --- Channel 2: Real embedding cosine similarity ---
+  // F-059 fix: previously used Jaccard word-overlap as a fake "vector" channel,
+  // which meant the hybrid was really FTS + FTS and missed semantic paraphrases
+  // like "fix npm publish ENEEDAUTH" resolving "investigate publish bug". Now
+  // pulls cached task embeddings from task_embeddings (populated by indexTask)
+  // and falls back to Jaccard only if no cache hit.
   let embRanked = []; // { id, score (0-1, higher = better) }
   if (contentVector && cosineFn) {
     try {
       const openTasks = indexer.db
         .prepare(`SELECT id, title, description FROM tasks WHERE status = 'open'`)
         .all();
-      // Embed each task title+description on-the-fly (brute-force, OK for <100 tasks)
       for (const task of openTasks) {
-        const taskText = `${task.title || ''} ${task.description || ''}`.substring(0, 200);
-        // Use cached embedding from tasks if available, else compute Jaccard as proxy
-        const taskWords = _tokenize(taskText);
-        const contentWords = _tokenize(searchText);
-        const jaccard = _jaccardSimilarity(contentWords, taskWords);
-        // Use Jaccard as a proxy for embedding score (real embedding would be better,
-        // but embedding each task synchronously is too slow for <30ms target)
-        // Instead, use the embeddings table if task was previously embedded
-        embRanked.push({ id: task.id, score: jaccard });
+        let score = 0;
+        // Try cached task embedding first
+        let cachedVec = null;
+        try {
+          const row = indexer.db.prepare('SELECT vector FROM task_embeddings WHERE task_id = ?').get(task.id);
+          if (row && row.vector) cachedVec = new Float32Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength / 4);
+        } catch { /* table may not exist yet */ }
+
+        if (cachedVec) {
+          score = cosineFn(contentVector, cachedVec);
+        } else {
+          // Jaccard fallback when embedding cache miss — still better than nothing
+          const taskText = `${task.title || ''} ${task.description || ''}`.substring(0, 200);
+          const taskWords = _tokenize(taskText);
+          const contentWords = _tokenize(searchText);
+          score = _jaccardSimilarity(contentWords, taskWords);
+        }
+        embRanked.push({ id: task.id, score });
       }
       embRanked = embRanked
-        .filter((t) => t.score >= 0.15)
+        .filter((t) => t.score >= EMBEDDING_RESOLVE_THRESHOLD)
         .sort((a, b) => b.score - a.score)
         .slice(0, 10);
     } catch {

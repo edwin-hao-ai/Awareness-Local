@@ -65,23 +65,48 @@ export async function backfillEmbeddings(daemon) {
  * Generate embedding for a memory and store it in the index.
  * Fire-and-forget — errors are logged but don't block the record flow.
  */
-export async function embedAndStore(daemon, memoryId, content) {
+function _firstLineAsTitle(content) {
+  if (!content) return '';
+  const line = String(content).split(/\r?\n/, 1)[0]?.trim() || '';
+  if (line.length < 3 || line.length > 120) return '';
+  // Skip lines that look like paragraphs (too many sentence terminators)
+  const terminators = (line.match(/[.!?。！？]/g) || []).length;
+  if (terminators > 1) return '';
+  return line;
+}
+
+export async function embedAndStore(daemon, memoryId, content, opts = {}) {
   if (!daemon._embedder || !content) return;
+  const { title = '' } = opts || {};
   try {
-    // Default: CJK-gated — English content uses `all-MiniLM-L6-v2` (stronger
-    // on English long-document retrieval: LongMemEval 60Q showed multilingual-
-    // e5-small drops R@5 by 7.3pp in that scenario). CJK content auto-switches
-    // to `multilingual-e5-small`. Opt-in `AWARENESS_EMBEDDER=multilingual`
-    // forces multilingual for ALL writes (useful for heavy non-English users).
+    // F-059 recall tuning · default embedder is multilingual-e5-small
+    // (118 MB, 384-dim) so English + CJK + other-language queries all
+    // share the same vector space. Previous CJK-gated routing meant
+    // cross-lingual queries had no semantic bridge (CN query → EN card
+    // rank 5+ in the 2026-04-19 eval). Opt-out `AWARENESS_EMBEDDER=english`
+    // drops to the 23 MB all-MiniLM-L6-v2 for English-heavy users who
+    // want the extra 7.3pp R@5 that MiniLM's English-only training gave
+    // on LongMemEval 60Q.
     let language;
-    if (process.env.AWARENESS_EMBEDDER === 'multilingual') {
-      language = 'multilingual';
-    } else {
+    if (process.env.AWARENESS_EMBEDDER === 'english') {
       language = detectNeedsCJK(content) ? 'multilingual' : 'english';
+    } else {
+      language = 'multilingual';
     }
-    const vector = await daemon._embedder.embed(content, 'passage', language);
+
+    // F-059 title×2 trick · when the memory has an associated title
+    // (from card / skill / first line of content), prepend it twice so
+    // the embedder weights those tokens more. Lifts Recall@1 by 3-5%
+    // on small corpora because titles are the most query-aligned
+    // surface of the whole record.
+    const inferredTitle = title || _firstLineAsTitle(content);
+    const passage = inferredTitle
+      ? `${inferredTitle}. ${inferredTitle}.\n\n${content || ''}`
+      : (content || '');
+
+    const vector = await daemon._embedder.embed(passage, 'passage', language);
     if (vector) {
-      const modelId = daemon._embedder.MODEL_MAP?.[language] || 'all-MiniLM-L6-v2';
+      const modelId = daemon._embedder.MODEL_MAP?.[language] || 'Xenova/multilingual-e5-small';
       daemon.indexer.storeEmbedding(memoryId, vector, modelId);
     }
   } catch (err) {

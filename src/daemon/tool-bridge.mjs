@@ -36,6 +36,30 @@ function tryParseJson(value) {
   catch { return value; }
 }
 
+/**
+ * F-058 action auto-inference. Callers used to have to pass action=remember /
+ * submit_insights / remember_batch / update_task explicitly. Now the server
+ * figures out what to do from the presence of content / insights / items /
+ * task_id — so the LLM can just describe WHAT it wants in one shape and
+ * never see an action enum.
+ *
+ * Priority (first match wins, so an explicit `action` still overrides):
+ *   1. items: array      → remember_batch
+ *   2. task_id + status  → update_task
+ *   3. content present   → remember (default)
+ *   4. insights only     → submit_insights
+ */
+function inferRecordAction(args) {
+  if (Array.isArray(args.items) && args.items.length > 0) return 'remember_batch';
+  if (args.task_id && args.status) return 'update_task';
+  const hasContent = typeof args.content === 'string'
+    ? args.content.length > 0
+    : Array.isArray(args.content) && args.content.length > 0;
+  if (hasContent) return 'remember';
+  if (args.insights && typeof args.insights === 'object') return 'submit_insights';
+  return undefined;
+}
+
 function normalizeStructuredArgs(args) {
   if (!args || typeof args !== 'object') return args || {};
   let mutated = false;
@@ -115,14 +139,15 @@ export async function callMcpTool(daemon, name, args) {
       }
 
       case 'awareness_record': {
-        // F-053 Phase 2 · Default action=remember when caller passes only `content`.
-        // Keeps explicit-action surface (remember_batch, update_task, submit_insights)
-        // fully functional for legacy clients.
+        // F-058 · auto-infer the action from params shape so the LLM only
+        // has to describe what it wants (content, insights, task_id…) —
+        // no action enum to remember. Legacy callers that still pass
+        // `action` win over inference (backward compatibility).
         const recordArgs = normalizeStructuredArgs(args);
-        const action = recordArgs.action
-          || (typeof recordArgs.content === 'string' && recordArgs.content ? 'remember' : undefined);
+        const action = recordArgs.action || inferRecordAction(recordArgs);
         let recordResult;
         switch (action) {
+          case 'write':       // legacy alias
           case 'remember':
             recordResult = await daemon._remember(recordArgs);
             break;
@@ -136,7 +161,7 @@ export async function callMcpTool(daemon, name, args) {
             recordResult = await daemon._submitInsights(recordArgs);
             break;
           default:
-            recordResult = { error: `awareness_record requires \`content\` (default action=remember) or an explicit \`action\`` };
+            recordResult = { error: 'awareness_record requires at least one of: content, insights, or task_id+status' };
         }
         result = mcpResult(recordResult);
         break;
@@ -177,15 +202,62 @@ export async function callMcpTool(daemon, name, args) {
 
           const methods = JSON.parse(skill.methods || '[]');
           const triggerConditions = JSON.parse(skill.trigger_conditions || '[]');
+          const sourceCardIds = JSON.parse(skill.source_card_ids || '[]');
+          let pitfalls = [];
+          try { pitfalls = JSON.parse(skill.pitfalls || '[]'); } catch {}
+          let verification = [];
+          try { verification = JSON.parse(skill.verification || '[]'); } catch {}
+
+          // Hydrate top-3 source cards so the skill is self-contained —
+          // LLM sees the linked context, not just IDs. "skill = head of its
+          // card cluster" (user ask 2026-04-19). Keep bounded to avoid
+          // token blow-up on widely-linked skills.
+          let linkedCards = [];
+          if (sourceCardIds.length > 0) {
+            try {
+              const placeholders = sourceCardIds.slice(0, 3).map(() => '?').join(',');
+              const rows = daemon.indexer.db
+                .prepare(`SELECT id, category, title, summary FROM knowledge_cards WHERE id IN (${placeholders}) AND status = 'active' LIMIT 3`)
+                .all(...sourceCardIds.slice(0, 3));
+              linkedCards = rows.map((r) => ({
+                id: r.id,
+                category: r.category,
+                title: r.title,
+                summary: r.summary,
+              }));
+            } catch { /* cards may have been superseded — skip hydration */ }
+          }
+
+          // F-059 · apply_skill is a usage signal — re-evaluate growth
+          // stage (usage_count just incremented, may push budding →
+          // evergreen). Best-effort; no failure path.
+          try {
+            const { evaluateSkillGrowth } = await import('./skill-growth.mjs');
+            const { scoreSkill } = await import('./skill-quality-score.mjs');
+            const rubric = scoreSkill({
+              name: skill.name,
+              summary: skill.summary || '',
+              methods,
+              trigger_conditions: triggerConditions,
+              tags: JSON.parse(skill.tags || '[]'),
+              pitfalls,
+              verification,
+            }).total;
+            evaluateSkillGrowth(daemon.indexer, skill_id, rubric);
+          } catch { /* growth eval best-effort */ }
 
           result = mcpResult({
             skill_name: skill.name,
             summary: skill.summary,
             methods,
+            pitfalls,
+            verification,
             trigger_conditions: triggerConditions,
-            source_card_count: JSON.parse(skill.source_card_ids || '[]').length,
+            source_card_count: sourceCardIds.length,
+            linked_cards: linkedCards,
+            growth_stage: skill.growth_stage || 'seedling',
             usage_count: (skill.usage_count || 0) + 1,
-            guidance: `Execute this ${methods.length}-step skill "${skill.name}" for the current task${context ? `: "${context}"` : ''}. Follow each step in order. Adapt descriptions to the specific context. Report completion status after finishing.`,
+            guidance: `Execute this ${methods.length}-step skill "${skill.name}" for the current task${context ? `: "${context}"` : ''}. Follow each step in order. Adapt descriptions to the specific context. Report completion status after finishing.${linkedCards.length > 0 ? ` Linked knowledge cards (${linkedCards.length}) provide supporting context.` : ''}`,
           });
         } catch (err) {
           result = mcpResult({ error: `Failed to apply skill: ${err.message}` });

@@ -315,10 +315,13 @@ describe('buildInitResult', () => {
     assert.equal(result.active_skills[0].methods.length, 1);
   });
 
-  it('splits preferences from other cards via splitPreferences', () => {
+  it('splits preferences from other cards via splitPreferences (F-055: high-confidence only when no focus)', () => {
+    // F-055 bug A — persona cards only surface when BM25-relevant to the
+    // current focus OR their confidence ≥ 0.9. This test bumps the mock
+    // persona cards to confidence=0.95 so they still appear without focus.
     const cards = [
-      makeCard('p1', 'Likes dark mode', { category: 'personal_preference' }),
-      makeCard('p2', 'Morning runner', { category: 'activity_preference' }),
+      makeCard('p1', 'Likes dark mode', { category: 'personal_preference', confidence: 0.95 }),
+      makeCard('p2', 'Morning runner', { category: 'activity_preference', confidence: 0.95 }),
       makeCard('kc1', 'Auth pattern', { category: 'decision' }),
     ];
     const indexer = createMockIndexer({ cards });
@@ -330,20 +333,35 @@ describe('buildInitResult', () => {
       maxCards: 5,
     });
 
-    assert.ok(result.user_preferences.length >= 1, 'should have user_preferences');
+    assert.ok(result.user_preferences.length >= 1, 'should have high-confidence user_preferences');
     assert.ok(
       result.user_preferences.every((c) =>
-        ['personal_preference', 'activity_preference', 'important_detail', 'career_info'].includes(c.category)
+        ['personal_preference', 'activity_preference', 'important_detail', 'career_info',
+         'plan_intention', 'health_info', 'custom_misc'].includes(c.category)
       ),
-      'user_preferences should only contain preference categories'
+      'user_preferences should only contain personal categories'
     );
-    assert.ok(
-      result.knowledge_cards.every((c) =>
-        !['personal_preference', 'activity_preference', 'important_detail', 'career_info'].includes(c.category)
-        || result.user_preferences.length >= 15  // overflow goes to knowledge_cards
-      ),
-      'knowledge_cards should not contain preference categories (unless overflow)'
-    );
+    // knowledge_cards path now comes from splitPreferences on recentCards, so
+    // confidence-filtered personas may still appear in recentCards even
+    // when filtered out of user_preferences. The important invariant: a
+    // persona card with confidence<0.9 and no focus-match is NOT in
+    // user_preferences.
+  });
+
+  it('F-055 bug A: low-confidence persona dropped when no focus', () => {
+    const cards = [
+      makeCard('p1', 'Weekend hobby', { category: 'personal_preference', confidence: 0.7 }),
+      makeCard('kc1', 'Auth pattern', { category: 'decision' }),
+    ];
+    const indexer = createMockIndexer({ cards });
+    const result = buildInitResult({
+      createSession,
+      indexer,
+      loadSpec: loadSpec(),
+      source: 'test',
+      maxCards: 5,
+    });
+    assert.equal(result.user_preferences.length, 0, 'low-confidence persona dropped without focus');
   });
 
   it('rendered_context is a string containing XML', () => {

@@ -19,7 +19,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { detectNeedsCJK } from './core/lang-detect.mjs';
 import { detectGuardSignals } from './core/guard-detector.mjs';
-import { classifyNoiseEvent } from './core/noise-filter.mjs';
+import { classifyNoiseEvent, cleanContent } from './core/noise-filter.mjs';
 import { createRequire } from 'node:module';
 import {
   AWARENESS_DIR,
@@ -31,6 +31,7 @@ import {
 import {
   createNoopIndexer,
   httpHealthCheck,
+  isSemanticallyRelated,
   jsonResponse,
   nowISO,
   splitPreferences,
@@ -66,6 +67,34 @@ import {
   extractAndIndex,
   warmupEmbedder,
 } from './daemon/embedding-helpers.mjs';
+import {
+  ensureArchetypeIndex,
+  tryRebuildBetterSqlite,
+} from './daemon/bootstrap.mjs';
+import {
+  findEvolutionTarget,
+  supersedeCard,
+} from './daemon/card-evolution.mjs';
+import { lookup as lookupEngine } from './daemon/engine/lookup.mjs';
+import { submitInsights as submitInsightsEngine } from './daemon/engine/submit-insights.mjs';
+import {
+  buildPerception as buildPerceptionEngine,
+  computeSignalId as computeSignalIdEngine,
+  ordinal as ordinalEngine,
+} from './daemon/engine/perception.mjs';
+import { remember as rememberEngine } from './daemon/engine/remember.mjs';
+import {
+  initWorkspaceScanner as initWorkspaceScannerImpl,
+  triggerScan as triggerScanImpl,
+  triggerGraphEmbedding as triggerGraphEmbeddingImpl,
+} from './daemon/workspace-init.mjs';
+import { checkPerceptionResolution as checkPerceptionResolutionImpl } from './daemon/engine/perception-resolve.mjs';
+import { handleHttpRequest as handleHttpRequestImpl } from './daemon/engine/http-router.mjs';
+import {
+  startSkillDecayTimer as startSkillDecayTimerImpl,
+  startGraphMaintenanceTimer as startGraphMaintenanceTimerImpl,
+  runSkillDecay as runSkillDecayImpl,
+} from './daemon/maintenance.mjs';
 import { runGraphEmbeddingPipeline } from './daemon/graph-embedder.mjs';
 import { shouldRequestExtraction, buildExtractionInstruction } from './daemon/extraction-instruction.mjs';
 
@@ -90,92 +119,8 @@ import { MemoryStore } from './core/memory-store.mjs';
 import { Indexer } from './core/indexer.mjs';
 import { CloudSync } from './core/cloud-sync.mjs';
 import { LocalMcpServer } from './mcp-server.mjs';
-import { runLifecycleChecks, validateTaskQuality, checkTaskDedup } from './core/lifecycle-manager.mjs';
+import { runLifecycleChecks, validateTaskQuality, checkTaskDedup, validateCardQuality } from './core/lifecycle-manager.mjs';
 
-// ---------------------------------------------------------------------------
-// F-034: Crystallization local helper
-// ---------------------------------------------------------------------------
-
-/** Eligible categories for F-034 crystallization detection */
-const _CRYST_CATEGORIES = new Set(['workflow', 'decision', 'problem_solution']);
-
-/** Minimum similar pre-existing cards required to trigger a hint */
-const _CRYST_MIN_SIMILAR = 2;
-
-/** Maximum cards to include in the hint */
-const _CRYST_MAX_CARDS = 5;
-
-/**
- * Check if a newly created card triggers a crystallization hint.
- * Uses SQLite FTS5 trigram search on knowledge_fts.
- *
- * @param {import('better-sqlite3').Database} db
- * @param {{ id: string, title: string, summary: string, category: string }} newCard
- * @returns {{ topic: string, similar_cards: Array, categories: string[] } | null}
- */
-function _checkCrystallizationLocal(db, newCard) {
-  try {
-    if (!_CRYST_CATEGORIES.has(newCard.category)) return null;
-
-    // Build query terms from title + summary (first 120 chars)
-    const queryText = `${newCard.title} ${(newCard.summary || '').slice(0, 120)}`.trim();
-    if (queryText.length < 5) return null;
-
-    // FTS5 trigram search — exclude the card itself, restrict to eligible categories
-    const cats = [..._CRYST_CATEGORIES].map(() => '?').join(',');
-    const rows = db.prepare(`
-      SELECT kc.id, kc.title, kc.summary, kc.category
-      FROM knowledge_cards kc
-      JOIN knowledge_fts fts ON fts.id = kc.id
-      WHERE knowledge_fts MATCH ?
-        AND kc.id != ?
-        AND kc.category IN (${cats})
-        AND kc.status NOT IN ('superseded', 'archived')
-      LIMIT ?
-    `).all(queryText, newCard.id, ...[..._CRYST_CATEGORIES], _CRYST_MAX_CARDS + 5);
-
-    if (rows.length < _CRYST_MIN_SIMILAR) return null;
-
-    // Check if a skill already exists covering this topic
-    const existingSkill = db.prepare(
-      `SELECT id FROM skills WHERE lower(name) LIKE ? AND status != 'archived' LIMIT 1`
-    ).get(`%${newCard.title.slice(0, 20).toLowerCase()}%`);
-    if (existingSkill) return null;
-
-    const similarCards = rows.slice(0, _CRYST_MAX_CARDS).map(r => ({
-      id: r.id,
-      title: r.title,
-      summary: r.summary || '',
-    }));
-
-    const categories = [...new Set(rows.map(r => r.category))];
-
-    return {
-      topic: newCard.title,
-      similar_cards: similarCards,
-      categories,
-      // F-053 post-0.8.0 · quality bar so the client LLM doesn't emit a
-      // thin "here is a skill" shell. Mirrors backend skill_extraction.py
-      // SYSTEM_PROMPT so both paths yield comparable skill quality.
-      instruction: [
-        'You detected 3+ similar cards on the same topic. Decide whether they',
-        'represent a genuinely REUSABLE procedure (an agent would follow these',
-        'steps on future tasks), and if yes synthesize ONE skill. Quality bar:',
-        '- name: 3-8 words, action-oriented ("Publish SDK to npm" not "npm stuff").',
-        '- summary: 200-500 chars, second-person imperative, injectable into an AI prompt verbatim. Include the WHY in one clause so the agent knows when to deviate.',
-        '- methods: ≥3 steps, each with {"step": N, "description": "..."} where description names a file / command / verification check / concrete outcome (50-200 chars per step). Vague verbs like "handle / process / manage" fail the bar.',
-        '- trigger_conditions: ≥2 distinct {"pattern": "When ...", "weight": 0-1} covering different phrasings of the same intent.',
-        '- tags: 3-8 lowercase keywords.',
-        '- source_card_ids: the IDs from similar_cards + this card.',
-        'If the cards do NOT meet the bar (e.g. they are 3 incidents of the same bug, not a reusable procedure), DO NOT invent a skill — return awareness_record with insights.skills=[] and a one-line comment. Empty is a first-class answer.',
-        'Submit via: awareness_record(content="Crystallized skill: <name>", insights={ skills: [{ name, summary, methods, trigger_conditions, tags, source_card_ids }] })',
-      ].join('\n'),
-    };
-  } catch (err) {
-    console.warn('[AwarenessDaemon] Crystallization check failed:', err.message);
-    return null;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // AwarenessLocalDaemon
@@ -533,69 +478,9 @@ export class AwarenessLocalDaemon {
    * @param {http.ServerResponse} res
    */
   async _handleRequest(req, res) {
-    // CORS preflight
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204, {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Mcp-Session-Id, X-Awareness-Project-Dir',
-      });
-      res.end();
-      return;
-    }
-
-    const url = new URL(req.url, `http://localhost:${this.port}`);
-
-    try {
-      // /healthz — exempt from project validation
-      if (url.pathname === '/healthz') {
-        return this._handleHealthz(res);
-      }
-
-      // Guard: reject requests while switchProject() is in progress
-      if (this._switching) {
-        jsonResponse(res, { error: 'project_switching', message: 'Daemon is switching projects, retry shortly' }, 503);
-        return;
-      }
-
-      // Per-request project_dir validation via X-Awareness-Project-Dir header
-      const requestedProject = req.headers['x-awareness-project-dir'];
-      if (requestedProject) {
-        const normalizedRequested = path.resolve(requestedProject);
-        const normalizedCurrent = path.resolve(this.projectDir);
-        if (normalizedRequested !== normalizedCurrent) {
-          jsonResponse(res, {
-            error: 'project_mismatch',
-            daemon_project: normalizedCurrent,
-            requested_project: normalizedRequested,
-          }, 409);
-          return;
-        }
-      }
-
-      // /mcp — MCP JSON-RPC over HTTP
-      if (url.pathname === '/mcp' || url.pathname.startsWith('/mcp/')) {
-        return await this._handleMcp(req, res);
-      }
-
-      // /api/v1/* — REST API
-      if (url.pathname.startsWith('/api/v1')) {
-        return await this._handleApi(req, res, url);
-      }
-
-      // / — Web Dashboard
-      if (url.pathname === '/' || url.pathname.startsWith('/web')) {
-        return this._handleWebUI(res, url.pathname);
-      }
-
-      // 404
-      jsonResponse(res, { error: 'Not Found' }, 404);
-    } catch (err) {
-      console.error('[awareness-local] request error:', err.message);
-      track('error_occurred', { error_code: err.code || 'unknown', component: 'api' });
-      jsonResponse(res, { error: 'Internal Server Error' }, 500);
-    }
+    return handleHttpRequestImpl(this, req, res);
   }
+
 
   /**
    * GET /healthz — health check + stats.
@@ -760,123 +645,14 @@ export class AwarenessLocalDaemon {
 
   /** Max content size per memory (1 MB). */
   static MAX_CONTENT_BYTES = 1024 * 1024;
-
   /** Write a single memory, index it, and trigger knowledge extraction. */
   async _remember(params) {
-    if (!params.content) {
-      return { error: 'content is required for remember action' };
-    }
-
-    const noiseReason = classifyNoiseEvent(params);
-    if (noiseReason) {
-      return { status: 'skipped', reason: noiseReason };
-    }
-
-    // SECURITY H1: Reject oversized content to prevent FTS5/embedding freeze
-    if (typeof params.content === 'string' && params.content.length > AwarenessLocalDaemon.MAX_CONTENT_BYTES) {
-      return { error: `Content too large (${params.content.length} bytes, max ${AwarenessLocalDaemon.MAX_CONTENT_BYTES})` };
-    }
-
-    // Auto-generate title from content if not provided
-    let title = params.title || '';
-    if (!title && params.content) {
-      // Take first sentence or first 80 chars, whichever is shorter
-      const firstLine = params.content.split(/[.\n!?。！？]/)[0].trim();
-      title = firstLine.length > 80 ? firstLine.substring(0, 77) + '...' : firstLine;
-    }
-
-    const memory = {
-      type: params.event_type || 'turn_summary',
-      content: params.content,
-      title,
-      tags: params.tags || [],
-      agent_role: params.agent_role || 'builder_agent',
-      session_id: params.session_id || '',
-      source: params.source || 'mcp',
-    };
-
-    // Write markdown file
-    const { id, filepath } = await this.memoryStore.write(memory);
-
-    // Index in SQLite
-    this.indexer.indexMemory(id, { ...memory, filepath }, params.content);
-
-    // Generate and store embedding for vector search (fire-and-forget)
-    this._embedAndStore(id, params.content).catch(() => {});
-
-    // Knowledge extraction (fire-and-forget)
-    this._extractAndIndex(id, params.content, memory, params.insights);
-
-    // Cloud sync (fire-and-forget — don't block the response)
-    if (this.cloudSync?.isEnabled()) {
-      Promise.all([
-        this.cloudSync.syncToCloud(),
-        this.cloudSync.syncInsightsToCloud(),
-        this.cloudSync.syncTasksToCloud(),
-      ]).catch((err) => {
-        console.warn('[awareness-local] cloud sync after remember failed:', err.message);
-      });
-    }
-
-    // Lifecycle: auto-resolve tasks/risks, garbage collect (fire-and-forget, hybrid FTS5+embedding)
-    const lifecycleOpts = {};
-    if (this._embedder) {
-      lifecycleOpts.embedFn = (text, type) => this._embedder.embed(text, type);
-      lifecycleOpts.cosineFn = this._embedder.cosineSimilarity;
-    }
-    const lifecycle = await runLifecycleChecks(this.indexer, params.content, title, params.insights, lifecycleOpts);
-
-    // Perception: surface signals the agent didn't ask about (Eywa Whisper)
-    const perception = this._buildPerception(params.content, title, memory, params.insights);
-
-    // Fire-and-forget: LLM auto-resolve check on existing active perceptions
-    this._checkPerceptionResolution(id, { title, content: params.content, tags: memory.tags, insights: params.insights })
-      .catch((err) => { if (process.env.DEBUG) console.warn('[awareness-local] perception resolve failed:', err.message); });
-
-    const result = {
-      status: 'ok',
-      id,
-      filepath,
-      mode: 'local',
-    };
-
-    // Return _extraction_instruction when the caller didn't provide pre-extracted insights.
-    // This mirrors the cloud MCP backend behaviour: the client LLM does extraction using
-    // its own model, then calls awareness_record(action="submit_insights") with the result.
-    if (shouldRequestExtraction(params)) {
-      try {
-        const existingCards = this.indexer.db
-          .prepare("SELECT id, title, category, summary FROM knowledge_cards WHERE status = 'active' ORDER BY created_at DESC LIMIT 8")
-          .all();
-        const spec = this._loadSpec();
-        result._extraction_instruction = buildExtractionInstruction({
-          content: params.content,
-          memoryId: id,
-          existingCards,
-          spec,
-        });
-      } catch (_err) {
-        // Non-fatal: extraction instruction is best-effort
-      }
-    }
-
-    if (perception && perception.length > 0) {
-      result.perception = perception;
-    }
-
-    // Surface lifecycle actions in response
-    if (lifecycle.resolved_tasks.length > 0) {
-      result.resolved_tasks = lifecycle.resolved_tasks;
-    }
-    if (lifecycle.mitigated_risks.length > 0) {
-      result.mitigated_risks = lifecycle.mitigated_risks;
-    }
-    if (lifecycle.archived > 0) {
-      result.archived_count = lifecycle.archived;
-    }
-
-    return result;
+    return rememberEngine(this, params);
   }
+
+
+
+  /** Write a single memory, index it, and trigger knowledge extraction. */
 
   /**
    * Build perception signals after a record operation (Eywa Whisper).
@@ -896,251 +672,13 @@ export class AwarenessLocalDaemon {
    * @param {Object} [insights] - Optional pre-extracted insights
    * @returns {Array<Object>} perception signals (max 5)
    */
-  _buildPerception(content, title, memory, insights) {
-    const signals = detectGuardSignals({
-      content,
-      title,
-      tags: memory?.tags,
-      insights,
-    }, {
-      profile: this.guardProfile,
-    });
-
-    try {
-      // 1. Resonance: find similar existing knowledge cards via FTS5
-      if (title && title.length >= 5) {
-        const resonanceResults = this.indexer.searchKnowledge(title, { limit: 2 });
-        for (const r of resonanceResults) {
-          // BM25 rank: closer to 0 = better match. Only surface strong matches.
-          if (r.rank > -3.0) {
-            const daysAgo = r.created_at
-              ? Math.floor((Date.now() - new Date(r.created_at).getTime()) / 86400000)
-              : 0;
-            signals.push({
-              type: 'resonance',
-              title: r.title,
-              summary: r.summary || '',
-              category: r.category || '',
-              card_id: r.id,
-              days_ago: daysAgo,
-              message: `🌿 Similar past experience (${daysAgo}d ago): "${r.title}"`,
-            });
-          }
-        }
-      }
-
-      // 2. Pattern: detect recurring themes via tag co-occurrence (not just category count)
-      if (insights?.knowledge_cards?.length) {
-        try {
-          // Collect tags from the last 7 days of active cards
-          const recentCards = this.indexer.db
-            .prepare(
-              `SELECT tags FROM knowledge_cards
-               WHERE status = 'active' AND created_at > datetime('now', '-7 days')`
-            )
-            .all();
-          const tagCounts = new Map();
-          for (const row of recentCards) {
-            let tags = [];
-            try { tags = JSON.parse(row.tags || '[]'); } catch { /* skip */ }
-            for (const t of tags) {
-              if (typeof t === 'string' && t.length >= 2) {
-                const k = t.toLowerCase();
-                tagCounts.set(k, (tagCounts.get(k) || 0) + 1);
-              }
-            }
-          }
-          // Find dominant themes (3+ occurrences in 7 days)
-          const themes = [...tagCounts.entries()]
-            .filter(([, count]) => count >= 3)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 2);
-          for (const [tag, count] of themes) {
-            signals.push({
-              type: 'pattern',
-              tag,
-              count,
-              message: `🔄 Recurring theme in last 7 days: "${tag}" (${count} cards) — consider a systematic approach`,
-            });
-          }
-        } catch { /* ignore */ }
-      }
-
-      // 3. Staleness: find related but old knowledge (30-day threshold, unified)
-      if (title && title.length >= 5) {
-        try {
-          const relatedResults = this.indexer.searchKnowledge(title, { limit: 3 });
-          for (const r of relatedResults) {
-            const ts = r.updated_at || r.created_at;
-            if (!ts) continue;
-            const daysOld = Math.floor(
-              (Date.now() - new Date(ts).getTime()) / 86400000
-            );
-            if (daysOld >= 30) {
-              signals.push({
-                type: 'staleness',
-                title: r.title,
-                category: r.category || '',
-                card_id: r.id,
-                days_since_update: daysOld,
-                message: `⏳ Related knowledge "${r.title}" hasn't been updated in ${daysOld} days — may be outdated`,
-              });
-              break; // Only 1 staleness signal
-            }
-          }
-        } catch { /* FTS query may fail on special chars */ }
-      }
-
-      // 4. Contradiction: proactive detection via FTS + superseded cards
-      // 4a. Surface recently superseded cards (7-day window)
-      try {
-        const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
-        const superseded = this.indexer.db
-          .prepare(
-            `SELECT id, title, category, summary FROM knowledge_cards
-             WHERE status = 'superseded' AND updated_at > ?
-             ORDER BY updated_at DESC LIMIT 2`
-          )
-          .all(sevenDaysAgo);
-        for (const r of superseded) {
-          signals.push({
-            type: 'contradiction',
-            title: r.title,
-            summary: r.summary || '',
-            card_id: r.id,
-            message: `⚡ Recently superseded belief: "${r.title}" — verify current approach`,
-          });
-        }
-      } catch { /* ignore */ }
-
-      // 4b. Proactive: if new card is decision/problem_solution, check for conflicting active cards
-      if (insights?.knowledge_cards?.length && title) {
-        try {
-          const newCard = insights.knowledge_cards[0];
-          const cat = newCard?.category;
-          if (cat === 'decision' || cat === 'problem_solution') {
-            const similar = this.indexer.searchKnowledge(title, { limit: 3 });
-            for (const existing of similar) {
-              if (existing.category !== cat || !existing.summary) continue;
-              // Simple heuristic: if same category and same topic but different summary content
-              // (Jaccard similarity of words < 0.3), flag as potential contradiction
-              const newWords = new Set((newCard.summary || '').toLowerCase().split(/\s+/));
-              const oldWords = new Set(existing.summary.toLowerCase().split(/\s+/));
-              const intersection = [...newWords].filter((w) => oldWords.has(w)).length;
-              const union = new Set([...newWords, ...oldWords]).size;
-              const jaccard = union > 0 ? intersection / union : 1;
-              if (jaccard < 0.3 && existing.id !== newCard.id) {
-                signals.push({
-                  type: 'contradiction',
-                  title: existing.title,
-                  summary: existing.summary,
-                  card_id: existing.id,
-                  similarity: jaccard,
-                  message: `⚡ New ${cat} may conflict with existing: "${existing.title}" — verify if the old approach is still valid`,
-                });
-                break;
-              }
-            }
-          }
-        } catch { /* ignore */ }
-      }
-
-      // 5. Related_decision: find prior decisions with overlapping tags
-      if (insights?.knowledge_cards?.length) {
-        try {
-          const newTags = new Set();
-          for (const card of insights.knowledge_cards) {
-            const tags = card.tags || [];
-            for (const tag of (Array.isArray(tags) ? tags : [])) {
-              if (typeof tag === 'string' && tag.length >= 2) {
-                newTags.add(tag.toLowerCase());
-              }
-            }
-          }
-          if (newTags.size > 0) {
-            const decisions = this.indexer.db
-              .prepare(
-                `SELECT id, title, summary, tags FROM knowledge_cards
-                 WHERE category = 'decision' AND status = 'active'
-                 ORDER BY created_at DESC LIMIT 20`
-              )
-              .all();
-            for (const d of decisions) {
-              let cardTags = [];
-              try { cardTags = JSON.parse(d.tags || '[]'); } catch { /* skip */ }
-              const overlap = cardTags.some(t => typeof t === 'string' && newTags.has(t.toLowerCase()));
-              if (overlap) {
-                signals.push({
-                  type: 'related_decision',
-                  title: d.title,
-                  summary: d.summary || '',
-                  card_id: d.id,
-                  message: `📌 Related prior decision: "${d.title}"`,
-                });
-                if (signals.filter(s => s.type === 'related_decision').length >= 2) break;
-              }
-            }
-          }
-        } catch { /* ignore */ }
-      }
-    } catch (err) {
-      // Perception is best-effort, never block the write
-      if (process.env.DEBUG) {
-        console.warn('[awareness-local] perception failed:', err.message);
-      }
-    }
-
-    // Apply perception lifecycle: compute signal_id, filter dormant/dismissed/snoozed, update state
-    const filteredSignals = [];
-    for (const sig of signals) {
-      try {
-        const signalId = this._computeSignalId(sig);
-        sig.signal_id = signalId;
-        if (!this.indexer?.shouldShowPerception) {
-          filteredSignals.push(sig);
-          continue;
-        }
-        if (!this.indexer.shouldShowPerception(signalId)) continue;
-        // Touch state (increment exposure_count, apply decay)
-        this.indexer.touchPerceptionState({
-          signal_id: signalId,
-          signal_type: sig.type,
-          source_card_id: sig.card_id || null,
-          title: sig.title || sig.message || '',
-          metadata: { tag: sig.tag, count: sig.count, category: sig.category },
-        });
-        filteredSignals.push(sig);
-      } catch { /* non-fatal */ }
-    }
-
-    return filteredSignals.slice(0, 5); // Cap at 5 signals
+  async _buildPerception(content, title, memory, insights) {
+    return buildPerceptionEngine(this, content, title, memory, insights);
   }
 
-  /**
-   * Compute a stable signal_id based on type + source identifier.
-   * Same signal produced in two different sessions must yield the same ID.
-   */
-  _computeSignalId(sig) {
-    const parts = [sig.type];
-    if (sig.card_id) parts.push(sig.card_id);
-    else if (sig.tag) parts.push(`tag:${sig.tag}`);
-    else if (sig.title) parts.push(`title:${sig.title.slice(0, 60)}`);
-    else parts.push(sig.message?.slice(0, 60) || '');
-    // Simple hash (deterministic)
-    const key = parts.join('|');
-    let hash = 0;
-    for (let i = 0; i < key.length; i++) {
-      hash = ((hash << 5) - hash + key.charCodeAt(i)) | 0;
-    }
-    return `sig_${sig.type}_${Math.abs(hash).toString(36)}`;
-  }
+  _computeSignalId(sig) { return computeSignalIdEngine(sig); }
 
-  /** Return ordinal string (1st, 2nd, 3rd, etc.) */
-  _ordinal(n) {
-    if (n % 100 >= 11 && n % 100 <= 13) return `${n}th`;
-    const suffix = { 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th';
-    return `${n}${suffix}`;
-  }
+  _ordinal(n) { return ordinalEngine(n); }
 
   /** Write multiple memories in batch. */
   async _rememberBatch(params) {
@@ -1206,456 +744,15 @@ export class AwarenessLocalDaemon {
 
   /** Process pre-extracted insights and index them. */
   async _submitInsights(params) {
-    const insights = params.insights || {};
-    let cardsCreated = 0;
-    let tasksCreated = 0;
-
-    // F-034: Track newly created eligible cards for crystallization detection
-    const CRYSTALLIZATION_CATEGORIES = new Set(['workflow', 'decision', 'problem_solution']);
-    const crystallizationCandidates = [];
-
-    // Process knowledge cards
-    if (Array.isArray(insights.knowledge_cards)) {
-      for (const card of insights.knowledge_cards) {
-        const cardId = `kc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-        const cardFilepath = path.join(
-          this.awarenessDir,
-          'knowledge',
-          card.category || 'insights',
-          `${cardId}.md`
-        );
-
-        // Ensure category directory exists
-        fs.mkdirSync(path.dirname(cardFilepath), { recursive: true });
-
-        // Write markdown file for the card
-        const cardContent = `---
-id: ${cardId}
-category: ${card.category || 'insight'}
-title: "${(card.title || '').replace(/"/g, '\\"')}"
-confidence: ${card.confidence ?? 0.8}
-status: ${card.status || 'active'}
-tags: ${JSON.stringify(card.tags || [])}
-created_at: ${nowISO()}
----
-
-${card.summary || card.title || ''}
-`;
-        fs.mkdirSync(path.dirname(cardFilepath), { recursive: true });
-        fs.writeFileSync(cardFilepath, cardContent, 'utf-8');
-
-        const cardData = {
-          id: cardId,
-          category: card.category || 'insight',
-          title: card.title || '',
-          summary: card.summary || '',
-          source_memories: JSON.stringify([]),
-          confidence: card.confidence ?? 0.8,
-          status: card.status || 'active',
-          tags: card.tags || [],
-          created_at: nowISO(),
-          filepath: cardFilepath,
-          content: card.summary || card.title || '',
-          novelty_score: card.novelty_score ?? null,
-          salience_reason: card.salience_reason || null,
-        };
-        this.indexer.indexKnowledgeCard(cardData);
-
-        // Incremental MOC: check if this card's tags trigger MOC creation
-        try {
-          const newMocIds = this.indexer.tryAutoMoc(cardData);
-          // Fire-and-forget: refine MOC titles with LLM if available
-          if (newMocIds.length > 0) {
-            this._refineMocTitles(newMocIds).catch(() => {});
-          }
-        } catch (e) {
-          console.warn('[awareness-local] autoMoc error:', e.message);
-        }
-
-        // Skill auto-evolution: check if new card should evolve existing skills
-        try {
-          if (this.extractor) {
-            this.extractor._checkSkillEvolution(cardData).catch((err) => {
-              console.warn('[awareness-local] skill evolution check failed:', err.message);
-            });
-          }
-        } catch { /* non-critical */ }
-
-        // F-034: Track eligible cards for crystallization hint check
-        if (CRYSTALLIZATION_CATEGORIES.has(card.category)) {
-          crystallizationCandidates.push({
-            id: cardId,
-            title: card.title || '',
-            summary: card.summary || '',
-            category: card.category,
-          });
-        }
-
-        cardsCreated++;
-      }
-    }
-
-    // Process action items / tasks
-    if (Array.isArray(insights.action_items)) {
-      for (const item of insights.action_items) {
-        // Quality gate: reject noise tasks
-        const rejection = validateTaskQuality(item.title);
-        if (rejection) {
-          console.warn(`[AwarenessDaemon] Rejected noise task (${rejection}): ${(item.title || '').substring(0, 60)}`);
-          continue;
-        }
-
-        // Dedup gate: skip if similar open task already exists
-        const { isDuplicate, existingTaskId } = checkTaskDedup(this.indexer, item.title);
-        if (isDuplicate) {
-          console.warn(`[AwarenessDaemon] Skipped duplicate task: "${(item.title || '').substring(0, 60)}" (existing: ${existingTaskId})`);
-          continue;
-        }
-
-        const taskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-        const taskFilepath = path.join(
-          this.awarenessDir, 'tasks', 'open', `${taskId}.md`
-        );
-
-        const taskContent = `---
-id: ${taskId}
-title: "${(item.title || '').replace(/"/g, '\\"')}"
-priority: ${item.priority || 'medium'}
-status: ${item.status || 'open'}
-created_at: ${nowISO()}
----
-
-${item.description || item.title || ''}
-`;
-        fs.mkdirSync(path.dirname(taskFilepath), { recursive: true });
-        fs.writeFileSync(taskFilepath, taskContent, 'utf-8');
-
-        this.indexer.indexTask({
-          id: taskId,
-          title: item.title || '',
-          description: item.description || '',
-          status: item.status || 'open',
-          priority: item.priority || 'medium',
-          agent_role: params.agent_role || null,
-          created_at: nowISO(),
-          updated_at: nowISO(),
-          filepath: taskFilepath,
-        });
-
-        tasksCreated++;
-      }
-    }
-
-    // Auto-complete tasks identified by the LLM
-    let tasksAutoCompleted = 0;
-    if (Array.isArray(insights.completed_tasks)) {
-      for (const completed of insights.completed_tasks) {
-        const taskId = (completed.task_id || '').trim();
-        if (!taskId) continue;
-        try {
-          const existing = this.indexer.db
-            .prepare('SELECT * FROM tasks WHERE id = ?')
-            .get(taskId);
-          if (existing && existing.status !== 'done') {
-            this.indexer.indexTask({
-              ...existing,
-              status: 'done',
-              updated_at: nowISO(),
-            });
-            tasksAutoCompleted++;
-          }
-        } catch (err) {
-          console.warn(`[AwarenessDaemon] Failed to auto-complete task '${taskId}':`, err.message);
-        }
-      }
-    }
-
-    // F-034: Handle skills submitted via insights.skills[] (crystallization result)
-    let skillsCreated = 0;
-    const submittedSkills = Array.isArray(insights.skills) ? insights.skills : [];
-    if (submittedSkills.length > 0) {
-      for (const skill of submittedSkills) {
-        if (!skill.name) continue;
-        try {
-          const skillId = `skill_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-          const now = nowISO();
-          this.indexer.db.prepare(`
-            INSERT OR IGNORE INTO skills
-              (id, name, summary, methods, trigger_conditions, tags, source_card_ids,
-               decay_score, usage_count, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 1.0, 0, 'active', ?, ?)
-          `).run(
-            skillId,
-            skill.name,
-            skill.summary || '',
-            skill.methods ? JSON.stringify(skill.methods) : null,
-            skill.trigger_conditions ? JSON.stringify(skill.trigger_conditions) : null,
-            skill.tags ? JSON.stringify(skill.tags) : null,
-            skill.source_card_ids ? JSON.stringify(skill.source_card_ids) : null,
-            now,
-            now,
-          );
-          skillsCreated++;
-        } catch (err) {
-          console.warn(`[AwarenessDaemon] Failed to save skill '${skill.name}':`, err.message);
-        }
-      }
-    }
-
-    // F-034: Crystallization hint — check if newly created eligible cards match existing ones
-    let crystallizationHint = null;
-    if (crystallizationCandidates.length > 0 && submittedSkills.length === 0) {
-      const first = crystallizationCandidates[0];
-      crystallizationHint = _checkCrystallizationLocal(this.indexer.db, first);
-    }
-
-    const result = {
-      status: 'ok',
-      cards_created: cardsCreated,
-      tasks_created: tasksCreated,
-      tasks_auto_completed: tasksAutoCompleted,
-      skills_created: skillsCreated,
-      mode: 'local',
-    };
-    if (crystallizationHint) {
-      result._skill_crystallization_hint = crystallizationHint;
-    }
-    return result;
+    return submitInsightsEngine(this, params);
   }
+
 
   /** Handle structured data lookups. */
   async _lookup(params) {
-    const { type, limit = 10, status, category, priority, session_id, agent_role, query } = params;
-
-    switch (type) {
-      case 'context': {
-        // Full context dump with preference separation
-        const stats = this.indexer.getStats();
-        const knowledge = this.indexer.getRecentKnowledge(limit);
-        const tasks = this.indexer.getOpenTasks(0);
-        const rawSessions = this.indexer.getRecentSessions(7);
-        // De-noise: only sessions with content; fallback to 3 most recent
-        let sessions = rawSessions.filter(s => s.memory_count > 0 || s.summary);
-        if (sessions.length === 0) sessions = rawSessions.slice(0, 3);
-        sessions = sessions.slice(0, 5);
-        const { user_preferences, knowledge_cards: otherCards } = splitPreferences(knowledge);
-        return { stats, user_preferences, knowledge_cards: otherCards, open_tasks: tasks, recent_sessions: sessions, mode: 'local' };
-      }
-
-      case 'tasks': {
-        let sql = 'SELECT * FROM tasks';
-        const conditions = [];
-        const sqlParams = [];
-
-        if (status) {
-          conditions.push('status = ?');
-          sqlParams.push(status);
-        } else {
-          conditions.push("status = 'open'");
-        }
-        if (priority) {
-          conditions.push('priority = ?');
-          sqlParams.push(priority);
-        }
-        if (agent_role) {
-          conditions.push('agent_role = ?');
-          sqlParams.push(agent_role);
-        }
-
-        if (conditions.length) sql += ' WHERE ' + conditions.join(' AND ');
-        sql += ' ORDER BY created_at DESC';
-        if (limit > 0) {
-          sql += ' LIMIT ?';
-          sqlParams.push(limit);
-        }
-
-        const tasks = this.indexer.db.prepare(sql).all(...sqlParams);
-        return { tasks, total: tasks.length, mode: 'local' };
-      }
-
-      case 'knowledge': {
-        let sql = 'SELECT * FROM knowledge_cards';
-        const conditions = [];
-        const sqlParams = [];
-
-        if (status) {
-          conditions.push('status = ?');
-          sqlParams.push(status);
-        } else {
-          conditions.push("status = 'active'");
-        }
-        if (category) {
-          conditions.push('category = ?');
-          sqlParams.push(category);
-        }
-
-        if (conditions.length) sql += ' WHERE ' + conditions.join(' AND ');
-        sql += ' ORDER BY created_at DESC LIMIT ?';
-        sqlParams.push(limit);
-
-        const cards = this.indexer.db.prepare(sql).all(...sqlParams);
-        return { knowledge_cards: cards, total: cards.length, mode: 'local' };
-      }
-
-      case 'risks': {
-        // Risks are stored as knowledge_cards with category containing 'risk' or 'pitfall'
-        let sql = "SELECT * FROM knowledge_cards WHERE (category = 'pitfall' OR category = 'risk')";
-        const sqlParams = [];
-
-        if (status) {
-          sql += ' AND status = ?';
-          sqlParams.push(status);
-        } else {
-          sql += " AND status = 'active'";
-        }
-
-        sql += ' ORDER BY created_at DESC LIMIT ?';
-        sqlParams.push(limit);
-
-        const risks = this.indexer.db.prepare(sql).all(...sqlParams);
-        return { risks, total: risks.length, mode: 'local' };
-      }
-
-      case 'session_history': {
-        let sql = 'SELECT * FROM sessions';
-        const conditions = [];
-        const sqlParams = [];
-
-        if (session_id) {
-          conditions.push('id = ?');
-          sqlParams.push(session_id);
-        }
-
-        if (conditions.length) sql += ' WHERE ' + conditions.join(' AND ');
-        sql += ' ORDER BY started_at DESC LIMIT ?';
-        sqlParams.push(limit);
-
-        const sessions = this.indexer.db.prepare(sql).all(...sqlParams);
-        return { sessions, total: sessions.length, mode: 'local' };
-      }
-
-      case 'timeline': {
-        // Timeline = recent memories ordered by time
-        const memories = this.indexer.db
-          .prepare(
-            "SELECT * FROM memories WHERE status = 'active' ORDER BY created_at DESC LIMIT ?"
-          )
-          .all(limit);
-        return { events: memories, total: memories.length, mode: 'local' };
-      }
-
-      case 'skills': {
-        // F-032: Query dedicated skills table (not deprecated knowledge_cards category)
-        let skillSql = 'SELECT * FROM skills';
-        const skillParams = [];
-
-        if (status) {
-          skillSql += ' WHERE status = ?';
-          skillParams.push(status);
-        } else {
-          skillSql += " WHERE status = 'active'";
-        }
-
-        skillSql += ' ORDER BY decay_score DESC, created_at DESC LIMIT ?';
-        skillParams.push(limit);
-
-        let skills;
-        try {
-          skills = this.indexer.db.prepare(skillSql).all(...skillParams);
-        } catch {
-          // Fallback to legacy knowledge_cards if skills table doesn't exist yet
-          skills = this.indexer.db.prepare(
-            "SELECT * FROM knowledge_cards WHERE category = 'skill' AND status = 'active' ORDER BY created_at DESC LIMIT ?"
-          ).all(limit);
-        }
-        return { skills, total: skills.length, mode: 'local' };
-      }
-
-      case 'perception': {
-        // Read perception signals from cache file + derive from recent knowledge
-        const signals = [];
-        const fs = await import('fs');
-        const path = await import('path');
-        const os = await import('os');
-
-        // 1. Read cached perception signals (written by awareness plugin hooks)
-        try {
-          const cachePath = path.join(this.awarenessDir, 'perception-cache.json');
-          if (fs.existsSync(cachePath)) {
-            const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
-            if (Array.isArray(cached)) {
-              signals.push(...cached);
-            } else if (cached.signals) {
-              signals.push(...cached.signals);
-            }
-          }
-        } catch { /* no cache file */ }
-
-        // 2. Derive staleness signals from old knowledge cards (30-day threshold, unified)
-        try {
-          const staleCards = this.indexer.db
-            .prepare(
-              `SELECT title, category, COALESCE(updated_at, created_at) AS last_touch
-               FROM knowledge_cards
-               WHERE status = 'active'
-                 AND COALESCE(updated_at, created_at) < datetime('now', '-30 days')
-               ORDER BY last_touch ASC LIMIT 3`
-            )
-            .all();
-          for (const card of staleCards) {
-            const daysOld = card.last_touch
-              ? Math.floor((Date.now() - new Date(card.last_touch).getTime()) / 86400000)
-              : 30;
-            signals.push({
-              type: 'staleness',
-              message: `⏳ Knowledge card "${card.title}" hasn't been updated in ${daysOld} days — may be outdated`,
-              card_title: card.title,
-              category: card.category,
-              days_since_update: daysOld,
-            });
-          }
-        } catch { /* db might not have the table */ }
-
-        // 3. Derive pattern signals from tag co-occurrence (not just category count)
-        try {
-          const recentCards = this.indexer.db
-            .prepare(
-              `SELECT tags FROM knowledge_cards
-               WHERE status = 'active' AND created_at > datetime('now', '-7 days')`
-            )
-            .all();
-          const tagCounts = new Map();
-          for (const row of recentCards) {
-            let tags = [];
-            try { tags = JSON.parse(row.tags || '[]'); } catch { /* skip */ }
-            for (const t of tags) {
-              if (typeof t === 'string' && t.length >= 2) {
-                const k = t.toLowerCase();
-                tagCounts.set(k, (tagCounts.get(k) || 0) + 1);
-              }
-            }
-          }
-          const themes = [...tagCounts.entries()]
-            .filter(([, count]) => count >= 3)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 3);
-          for (const [tag, count] of themes) {
-            signals.push({
-              type: 'pattern',
-              message: `🔄 Recurring theme in last 7 days: "${tag}" (${count} cards) — consider a systematic approach`,
-              tag,
-              count,
-            });
-          }
-        } catch { /* db issue */ }
-
-        return { signals, total: signals.length, mode: 'local' };
-      }
-
-      default:
-        return { error: `Unknown lookup type: ${type}`, mode: 'local' };
-    }
+    return lookupEngine(this, params);
   }
+
 
   // -----------------------------------------------------------------------
   // Knowledge extraction
@@ -1690,24 +787,7 @@ ${item.description || item.title || ''}
    * in-flight promise is shared so we don't double-embed the archetypes.
    */
   async _ensureArchetypeIndex() {
-    if (this._archetypeIndex) return this._archetypeIndex;
-    if (this._archetypeIndexBuildInFlight) return this._archetypeIndexBuildInFlight;
-
-    this._archetypeIndexBuildInFlight = (async () => {
-      try {
-        if (!this._embedder) return null;
-        const { buildArchetypeIndex } = await import('./core/query-type-router.mjs');
-        this._archetypeIndex = await buildArchetypeIndex({
-          embed: (t, type, lang) => this._embedder.embed(t, type, lang),
-        });
-        return this._archetypeIndex;
-      } catch {
-        return null;
-      } finally {
-        this._archetypeIndexBuildInFlight = null;
-      }
-    })();
-    return this._archetypeIndexBuildInFlight;
+    return ensureArchetypeIndex(this);
   }
 
   async _embedAndStore(memoryId, content) {
@@ -1739,37 +819,7 @@ ${item.description || item.title || ''}
    * Initialize workspace scanner: load state, start watchers, trigger first scan.
    * All operations are non-blocking — errors degrade gracefully.
    */
-  _initWorkspaceScanner() {
-    try {
-      this.scanConfig = loadScanConfig(this.projectDir);
-      if (!this.scanConfig.enabled) {
-        console.log('[workspace-scanner] disabled via scan-config.json');
-        return;
-      }
-
-      // Load persisted state (for last_git_commit etc.)
-      this.scanState = loadScanState(this.projectDir);
-
-      // Start workspace file watcher
-      this._workspaceWatcher = startWorkspaceWatcher(this);
-
-      // Start .git/HEAD watcher
-      if (isGitRepo(this.projectDir)) {
-        this._gitHeadWatcher = startGitHeadWatcher(this);
-      }
-
-      // Trigger initial scan in background (deferred 3s to avoid blocking startup)
-      setTimeout(() => {
-        this.triggerScan('incremental').catch(err => {
-          console.error('[workspace-scanner] initial scan failed:', err.message);
-        });
-      }, 3000);
-
-      console.log('[workspace-scanner] initialized, first scan in 3s');
-    } catch (err) {
-      console.error('[workspace-scanner] init failed (degraded):', err.message);
-    }
-  }
+  _initWorkspaceScanner() { return initWorkspaceScannerImpl(this); }
 
   /**
    * Trigger a workspace scan. Supports 'full' and 'incremental' modes.
@@ -1782,201 +832,7 @@ ${item.description || item.title || ''}
    * @param {'full'|'incremental'} mode
    * @returns {Promise<import('./core/workspace-scanner.mjs').IndexResult>}
    */
-  async triggerScan(mode = 'incremental') {
-    if (!this.indexer || !this.scanConfig?.enabled) {
-      return { indexed: 0, skipped: 0, errors: 0, edges: 0 };
-    }
-
-    // Prevent concurrent scans
-    if (this.scanState.status === 'scanning' || this.scanState.status === 'indexing') {
-      console.log('[workspace-scanner] scan already in progress, skipping');
-      return { indexed: 0, skipped: 0, errors: 0, edges: 0 };
-    }
-
-    const startTime = Date.now();
-    this._scanAbortController = new AbortController();
-
-    try {
-      this.scanState = updateScanState(this.scanState, {
-        status: 'scanning',
-        phase: 'discovering',
-      });
-
-      const config = this.scanConfig;
-      const gitignore = loadGitignoreRules(this.projectDir, {
-        extraPatterns: config.exclude,
-      });
-
-      let filesToIndex;
-
-      if (mode === 'incremental' && config.git_incremental && isGitRepo(this.projectDir)) {
-        const currentCommit = getCurrentCommit(this.projectDir);
-        const lastCommit = this.scanState.last_git_commit;
-
-        if (currentCommit && currentCommit === lastCommit) {
-          // No changes since last scan
-          this.scanState = updateScanState(this.scanState, {
-            status: 'idle',
-            phase: null,
-            last_incremental_at: new Date().toISOString(),
-          });
-          return { indexed: 0, skipped: 0, errors: 0, edges: 0 };
-        }
-
-        const gitChanges = getGitChanges(this.projectDir, lastCommit);
-
-        if (gitChanges) {
-          // Handle deletions and renames first
-          if (gitChanges.deleted.length > 0) {
-            markDeletedFiles(gitChanges.deleted, this.indexer);
-          }
-          if (gitChanges.renamed.length > 0) {
-            handleRenamedFiles(gitChanges.renamed, this.indexer);
-          }
-
-          // Filter changed files through the scan pipeline
-          const changedPaths = [
-            ...gitChanges.added,
-            ...gitChanges.modified,
-            ...gitChanges.renamed.map(r => r.to),
-          ];
-
-          filesToIndex = changedPaths
-            .map(relPath => {
-              const absPath = path.join(this.projectDir, relPath);
-              if (!fs.existsSync(absPath)) return null;
-
-              const classification = classifyFile(relPath, config);
-              if (classification.excluded) return null;
-              if (gitignore.isIgnored(relPath)) return null;
-
-              let stat;
-              try { stat = fs.statSync(absPath); } catch { return null; }
-
-              return {
-                absolutePath: absPath,
-                relativePath: relPath,
-                category: classification.category,
-                size: stat.size,
-                mtime: stat.mtimeMs,
-                oversized: stat.size > (config.max_file_size_kb || 500) * 1024,
-              };
-            })
-            .filter(Boolean);
-
-          // Update commit tracking
-          if (currentCommit) {
-            this.scanState = updateScanState(this.scanState, {
-              last_git_commit: currentCommit,
-            });
-          }
-        } else {
-          // Git changes unavailable — do full scan
-          filesToIndex = scanWorkspace(this.projectDir, {
-            config,
-            gitignore,
-            signal: this._scanAbortController.signal,
-          });
-        }
-      } else {
-        // Full scan
-        filesToIndex = scanWorkspace(this.projectDir, {
-          config,
-          gitignore,
-          signal: this._scanAbortController.signal,
-        });
-      }
-
-      this.scanState = updateScanState(this.scanState, {
-        status: 'indexing',
-        phase: 'parsing',
-        discovered_total: filesToIndex.length,
-        index_total: filesToIndex.length,
-        index_done: 0,
-        index_skipped: 0,
-      });
-
-      // Index the files
-      const result = await indexWorkspaceFiles(filesToIndex, this.indexer, {
-        signal: this._scanAbortController.signal,
-        onProgress: (progress) => {
-          this.scanState = updateScanState(this.scanState, {
-            index_done: progress.done,
-            index_skipped: progress.skipped,
-          });
-        },
-      });
-
-      // Update git commit tracking (needed for both full and incremental scans)
-      if (!this.scanState.last_git_commit && isGitRepo(this.projectDir)) {
-        const headCommit = getCurrentCommit(this.projectDir);
-        if (headCommit) {
-          this.scanState = updateScanState(this.scanState, {
-            last_git_commit: headCommit,
-          });
-        }
-      }
-
-      // Count totals from graph_nodes
-      let totalFiles = 0;
-      let totalCodeFiles = 0;
-      let totalDocFiles = 0;
-      let totalSymbols = 0;
-      try {
-        totalFiles = this.indexer.db.prepare(
-          "SELECT count(*) AS c FROM graph_nodes WHERE node_type = 'file' AND status = 'active'"
-        ).get().c;
-        totalCodeFiles = this.indexer.db.prepare(
-          "SELECT count(*) AS c FROM graph_nodes WHERE node_type = 'file' AND status = 'active' AND json_extract(metadata, '$.category') = 'code'"
-        ).get().c;
-        totalDocFiles = this.indexer.db.prepare(
-          "SELECT count(*) AS c FROM graph_nodes WHERE node_type = 'file' AND status = 'active' AND json_extract(metadata, '$.category') = 'docs'"
-        ).get().c;
-        totalSymbols = this.indexer.db.prepare(
-          "SELECT count(*) AS c FROM graph_nodes WHERE node_type = 'symbol' AND status = 'active'"
-        ).get().c;
-      } catch { /* stats are non-critical */ }
-
-      const duration = Date.now() - startTime;
-      const scanType = mode === 'full' ? 'last_full_scan_at' : 'last_incremental_at';
-
-      this.scanState = updateScanState(this.scanState, {
-        status: 'idle',
-        phase: null,
-        total_files: totalFiles,
-        total_code_files: totalCodeFiles,
-        total_doc_files: totalDocFiles,
-        total_symbols: totalSymbols,
-        scan_duration_ms: duration,
-        [scanType]: new Date().toISOString(),
-      });
-
-      // Persist state
-      saveScanState(this.projectDir, this.scanState);
-
-      if (result.indexed > 0 || result.edges > 0) {
-        console.log(
-          `[workspace-scanner] ${mode} scan done: ${result.indexed} indexed, ${result.skipped} skipped, ${result.edges} edges (${duration}ms)`
-        );
-      }
-
-      // Fire-and-forget: embed graph nodes + generate similarity edges
-      // Runs in background after scan completes — does not block return
-      if (result.indexed > 0 && this._embedder) {
-        this._triggerGraphEmbedding();
-      }
-
-      return result;
-    } catch (err) {
-      this.scanState = appendScanError(
-        updateScanState(this.scanState, { status: 'error', phase: null }),
-        err.message
-      );
-      saveScanState(this.projectDir, this.scanState);
-      console.error('[workspace-scanner] scan error:', err.message);
-      return { indexed: 0, skipped: 0, errors: 1, edges: 0 };
-    }
-  }
+  async triggerScan(mode = 'incremental') { return triggerScanImpl(this, mode); }
 
   // -----------------------------------------------------------------------
   // Graph Embedding (Phase 5 T-030)
@@ -1986,41 +842,7 @@ ${item.description || item.title || ''}
    * Run graph embedding pipeline in background.
    * Updates ScanState with embedding progress.
    */
-  _triggerGraphEmbedding() {
-    // Update state to show embedding phase
-    this.scanState = updateScanState(this.scanState, {
-      status: 'indexing',
-      phase: 'embedding',
-      embed_total: 0,
-      embed_done: 0,
-    });
-
-    runGraphEmbeddingPipeline(this, {
-      onProgress: (done, total) => {
-        this.scanState = updateScanState(this.scanState, {
-          embed_total: total,
-          embed_done: done,
-        });
-      },
-    })
-      .then(({ embedding, similarity }) => {
-        this.scanState = updateScanState(this.scanState, {
-          status: 'idle',
-          phase: null,
-          embed_total: embedding.total,
-          embed_done: embedding.embedded,
-        });
-        saveScanState(this.projectDir, this.scanState);
-      })
-      .catch((err) => {
-        console.warn('[graph-embedder] pipeline error:', err.message);
-        this.scanState = updateScanState(this.scanState, {
-          status: 'idle',
-          phase: null,
-        });
-        saveScanState(this.projectDir, this.scanState);
-      });
-  }
+  _triggerGraphEmbedding() { return triggerGraphEmbeddingImpl(this); }
 
   // -----------------------------------------------------------------------
   // Skill Decay
@@ -2030,17 +852,7 @@ ${item.description || item.title || ''}
    * Start a 24-hour interval that recalculates skill decay scores.
    * Also runs once at startup.
    */
-  _startSkillDecayTimer() {
-    const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
-    // Run once at startup (deferred so it doesn't block start)
-    setTimeout(() => this._runSkillDecay(), 5000);
-    this._skillDecayTimer = setInterval(
-      () => this._runSkillDecay(),
-      TWENTY_FOUR_HOURS,
-    );
-    // Allow process to exit even if timer is pending
-    if (this._skillDecayTimer.unref) this._skillDecayTimer.unref();
-  }
+  _startSkillDecayTimer() { return startSkillDecayTimerImpl(this); }
 
   /**
    * 0.7.2: bound graph_edges growth + reclaim pages daily.
@@ -2048,38 +860,7 @@ ${item.description || item.title || ''}
    * Order matters: prune first (large DELETE), then VACUUM to actually
    * return the pages to disk. SQLite does not auto-compact.
    */
-  _startGraphMaintenanceTimer() {
-    const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
-    const MAX_EDGES_PER_NODE = 50;
-    const run = () => {
-      if (!this.indexer || !this.indexer.db) return;
-      try {
-        const pruned = this.indexer.pruneGraphEdges({
-          maxPerNode: MAX_EDGES_PER_NODE,
-          edgeType: 'doc_reference',
-        });
-        if (pruned.removed > 0) {
-          console.log(`[awareness-local] graph maintenance: pruned ${pruned.removed} doc_reference edges`);
-        }
-        // Only VACUUM if we actually freed rows — VACUUM is expensive and
-        // unnecessary on a quiet DB.
-        if (pruned.removed > 1000) {
-          const compact = this.indexer.compactDb();
-          if (compact.ok && compact.bytesFreed > 0) {
-            const mb = (compact.bytesFreed / (1024 * 1024)).toFixed(1);
-            console.log(`[awareness-local] graph maintenance: VACUUM freed ${mb} MB`);
-          }
-        }
-      } catch (err) {
-        console.warn('[awareness-local] graph maintenance failed:', err.message);
-      }
-    };
-    // Defer initial run so daemon startup is not delayed by a possibly-large
-    // VACUUM on the first boot after upgrading.
-    setTimeout(run, 60_000);
-    this._graphMaintenanceTimer = setInterval(run, TWENTY_FOUR_HOURS);
-    if (this._graphMaintenanceTimer.unref) this._graphMaintenanceTimer.unref();
-  }
+  _startGraphMaintenanceTimer() { return startGraphMaintenanceTimerImpl(this); }
 
   /**
    * Recalculate decay_score for every non-pinned skill.
@@ -2089,48 +870,7 @@ ${item.description || item.title || ''}
    *   decay_score = min(1.0, baseDecay + usageBoost)
    * Pinned skills always keep decay_score = 1.0.
    */
-  _runSkillDecay() {
-    if (!this.indexer || !this.indexer.db) return;
-    try {
-      const now = Date.now();
-      const skills = this.indexer.db
-        .prepare('SELECT id, last_used_at, usage_count, pinned FROM skills WHERE status = ?')
-        .all('active');
-
-      const update = this.indexer.db.prepare(
-        'UPDATE skills SET decay_score = ?, updated_at = ? WHERE id = ?',
-      );
-
-      const nowISO_ = new Date(now).toISOString();
-      const LN_20 = Math.log(20);
-      const HALF_LIFE_DAYS = 30;
-      const LAMBDA = 0.693 / HALF_LIFE_DAYS; // ln(2) / half-life
-
-      const batch = this.indexer.db.transaction(() => {
-        for (const skill of skills) {
-          if (skill.pinned) {
-            update.run(1.0, nowISO_, skill.id);
-            continue;
-          }
-          const lastUsed = skill.last_used_at
-            ? new Date(skill.last_used_at).getTime()
-            : now;
-          const daysSince = (now - lastUsed) / (1000 * 60 * 60 * 24);
-          const baseDecay = Math.exp(-LAMBDA * daysSince);
-          const usageBoost = Math.log((skill.usage_count || 0) + 1) / LN_20;
-          const score = Math.min(1.0, baseDecay + usageBoost);
-          update.run(Math.round(score * 1000) / 1000, nowISO_, skill.id);
-        }
-      });
-      batch();
-
-      if (skills.length > 0) {
-        console.log(`[awareness-local] skill decay: updated ${skills.length} skills`);
-      }
-    } catch (err) {
-      console.error('[awareness-local] skill decay error:', err.message);
-    }
-  }
+  _runSkillDecay() { return runSkillDecayImpl(this); }
 
   // -----------------------------------------------------------------------
   // Config & spec loading
@@ -2154,6 +894,23 @@ ${item.description || item.title || ''}
       if (this.watcher) { this.watcher.close(); this.watcher = null; }
       if (this._reindexTimer) { clearTimeout(this._reindexTimer); this._reindexTimer = null; }
       if (this.cloudSync) { try { await this.cloudSync.stop(); } catch { /* best-effort */ } this.cloudSync = null; }
+
+      // F-055b P0 — also tear down the workspace-scanner watchers that
+      // were rooted at the OLD projectDir. Without this the fs/git watchers
+      // keep firing on stale paths and graph_nodes stays polluted with
+      // the previous workspace's files.
+      if (this._workspaceWatcher && typeof this._workspaceWatcher.close === 'function') {
+        try { this._workspaceWatcher.close(); } catch { /* best-effort */ }
+        this._workspaceWatcher = null;
+      }
+      if (this._gitHeadWatcher && typeof this._gitHeadWatcher.close === 'function') {
+        try { this._gitHeadWatcher.close(); } catch { /* best-effort */ }
+        this._gitHeadWatcher = null;
+      }
+      if (this._scanAbortController) {
+        try { this._scanAbortController.abort(); } catch { /* best-effort */ }
+        this._scanAbortController = null;
+      }
 
       // 2. Close old indexer
       if (this.indexer && this.indexer.close) {
@@ -2207,6 +964,24 @@ ${item.description || item.title || ''}
         registerWorkspace(newProjectDir, { port: this.port });
       } catch { /* config.mjs not available */ }
 
+      // 9. F-055b P0 — re-initialise the workspace scanner against the
+      // new projectDir and fire a full rescan in the background. Before
+      // this, graph_nodes kept pointing at the OLD workspace because
+      // `_initWorkspaceScanner` only ran at daemon boot — users saw
+      // "Code Files: 500" (stale) in the UI while `/scan/status` showed
+      // the correct 20-file count for the new workspace.
+      try {
+        this.scanState = { status: 'idle', phase: '', last_scan_at: null };
+        this._initWorkspaceScanner();
+        // Kick a full rescan right away (don't wait the 3s stagger — the
+        // user just explicitly asked to switch, so latency matters).
+        this.triggerScan('full').catch((err) => {
+          console.error('[workspace-scanner] post-switch full rescan failed:', err.message);
+        });
+      } catch (err) {
+        console.error('[workspace-scanner] re-init after switch failed:', err.message);
+      }
+
       console.log(`[awareness-local] switched to: ${newProjectDir} (${this.indexer.getStats().totalMemories} memories)`);
       return { projectDir: newProjectDir, stats: this.indexer.getStats() };
     } finally {
@@ -2231,20 +1006,7 @@ ${item.description || item.title || ''}
    * @returns {Promise<boolean>} true if rebuild succeeded
    */
   async _tryRebuildBetterSqlite(errMsg) {
-    try {
-      const match = errMsg.match(/The module '(.+?better-sqlite3.+?\.node)'/);
-      if (!match) return false;
-      const moduleDir = match[1].split('/build/')[0];
-      const { execSync } = await import('node:child_process');
-      console.log(`[awareness-local] Node.js version changed — auto-rebuilding better-sqlite3 for ${process.version}...`);
-      execSync('npm rebuild', { cwd: moduleDir, stdio: 'pipe' });
-      console.log('[awareness-local] better-sqlite3 rebuilt successfully');
-      return true;
-    } catch (rebuildErr) {
-      console.error(`[awareness-local] Auto-rebuild failed: ${rebuildErr.message}`);
-      console.error('[awareness-local] Falling back to file-only mode (no search)');
-      return false;
-    }
+    return tryRebuildBetterSqlite(errMsg);
   }
 
   /** Load awareness-spec.json from the bundled spec directory. */
@@ -2265,6 +1027,11 @@ ${item.description || item.title || ''}
       importMetaUrl: import.meta.url,
       cachedEmbedder: this._embedder,
     });
+    // F-059 · inject into indexer so indexTask can cache task vectors
+    // for the auto-resolve hybrid search (real vector channel, not Jaccard).
+    if (this._embedder && this.indexer?.setEmbedder) {
+      this.indexer.setEmbedder(this._embedder);
+    }
     return this._embedder;
   }
 
@@ -2348,117 +1115,9 @@ ${item.description || item.title || ''}
    * "resolved" signals are auto-dismissed with a resolution_reason.
    */
   async _checkPerceptionResolution(newMemoryId, newMemory) {
-    // Rate limit: 1 check per memory per 60s
-    const now = Date.now();
-    if (!this._lastResolveCheckAt) this._lastResolveCheckAt = 0;
-    if (now - this._lastResolveCheckAt < 60000) return;
-    this._lastResolveCheckAt = now;
-
-    // Only if cloud is enabled (we route LLM calls through cloud API)
-    const config = this._loadConfig();
-    if (!config.cloud?.enabled || !config.cloud?.api_key) return;
-
-    // Fetch active perceptions that support auto-resolution
-    if (!this.indexer?.listPerceptionStates) return;
-    const activeStates = this.indexer.listPerceptionStates({
-      state: ['active', 'snoozed'],
-      limit: 50,
-    });
-    const candidates = activeStates.filter((s) =>
-      ['guard', 'contradiction', 'pattern', 'staleness'].includes(s.signal_type)
-    );
-    if (candidates.length === 0) return;
-
-    // Pre-filter: only signals with tag/keyword/source_card overlap with new memory
-    const memTags = new Set((newMemory.tags || []).map((t) => String(t).toLowerCase()));
-    const memText = `${newMemory.title || ''} ${newMemory.content || ''}`.toLowerCase();
-    const newCategory = newMemory.insights?.knowledge_cards?.[0]?.category;
-    const isFixCategory = ['problem_solution', 'decision'].includes(newCategory);
-    if (!isFixCategory && newCategory) return; // Only problem_solution/decision/null can resolve
-
-    const filtered = candidates.filter((sig) => {
-      // Check tag overlap (signal metadata may have tags)
-      let sigTags = [];
-      try { sigTags = JSON.parse(sig.metadata || '{}').tags || []; } catch {}
-      const hasTagOverlap = sigTags.some((t) => memTags.has(String(t).toLowerCase()));
-
-      // Check keyword mention in title
-      const sigWords = (sig.title || '').toLowerCase().split(/\s+/).filter((w) => w.length > 3);
-      const hasKeyword = sigWords.some((w) => memText.includes(w));
-
-      // Check source card reference
-      const sourceMemories = newMemory.insights?.knowledge_cards?.[0]?.source_memories || [];
-      const refsSourceCard = sig.source_card_id && sourceMemories.includes(sig.source_card_id);
-
-      return hasTagOverlap || hasKeyword || refsSourceCard;
-    });
-
-    if (filtered.length === 0) return;
-
-    // Build batch prompt
-    const systemPrompt = `You are analyzing whether a new memory resolves previously-flagged awareness signals.
-
-A "signal" is a warning or insight the system surfaced to the user:
-- GUARD: a known pitfall (e.g., "Electron shell must use --norc")
-- CONTRADICTION: conflicting beliefs in the memory
-- PATTERN: recurring theme suggesting systematic action
-- STALENESS: knowledge that may be outdated
-
-Given each signal + the new memory, classify:
-- "resolved": new memory shows CLEAR evidence the issue was fixed or addressed
-- "irrelevant": new memory is unrelated to this signal
-- "still_active": signal is still relevant (DEFAULT — be conservative)
-
-Rules:
-- Only mark "resolved" when there's explicit evidence (fix, refactor, decision made)
-- Related but not resolved → "still_active"
-- When in doubt → "still_active"
-
-Return JSON only: {"results": [{"signal_id":"...","status":"resolved|irrelevant|still_active","reason":"..."}]}`;
-
-    const userContent = `NEW MEMORY:
-Title: ${newMemory.title || '(no title)'}
-Content: ${(newMemory.content || '').slice(0, 500)}
-Tags: ${[...memTags].join(', ') || '(none)'}
-
-SIGNALS TO CHECK:
-${filtered.map((s) => `[${s.signal_id}] (${s.signal_type}) ${s.title || s.signal_id}`).join('\n')}`;
-
-    try {
-      const { httpJson } = await import('./daemon/cloud-http.mjs');
-      const apiBase = config.cloud.api_base || 'https://awareness.market/api/v1';
-      const memoryId = config.cloud.memory_id;
-      const apiKey = config.cloud.api_key;
-      const resp = await httpJson('POST', `${apiBase}/memories/${memoryId}/chat`, {
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userContent },
-        ],
-        max_tokens: 500,
-      }, { Authorization: `Bearer ${apiKey}` });
-
-      const raw = typeof resp === 'string' ? resp
-        : resp?.content || resp?.choices?.[0]?.message?.content || '';
-      if (!raw) return;
-
-      // Parse JSON response (robust — grab first JSON object)
-      const jsonMatch = raw.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) return;
-      const parsed = JSON.parse(jsonMatch[0]);
-      const results = Array.isArray(parsed.results) ? parsed.results : [];
-
-      for (const r of results) {
-        if (r.status === 'resolved' && r.signal_id) {
-          this.indexer.autoResolvePerception(r.signal_id, newMemoryId, r.reason || 'Auto-resolved by LLM');
-          console.log(`[awareness-local] perception auto-resolved: ${r.signal_id} — ${(r.reason || '').slice(0, 80)}`);
-        }
-      }
-    } catch (err) {
-      if (process.env.DEBUG) {
-        console.warn(`[awareness-local] LLM perception resolve failed: ${err.message}`);
-      }
-    }
+    return checkPerceptionResolutionImpl(this, newMemoryId, newMemory);
   }
+
 
   // -----------------------------------------------------------------------
   // Utility

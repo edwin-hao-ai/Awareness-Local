@@ -14,6 +14,22 @@ export const PREFERENCE_FIRST_CATEGORIES = new Set([
   'career_info',
 ]);
 
+// F-055: single source of truth for *all* personal-style card categories.
+// Matches the `categories` enum in backend/awareness-spec.json. Used by:
+// - helpers.filterPersonaByRelevance (persona gate)
+// - lifecycle-manager.validateCardQuality (relaxed length threshold)
+// - mcp-handlers.buildInitResult (pulling persona candidates)
+// Avoid inlining this list elsewhere — grow this one constant instead.
+export const PERSONAL_CARD_CATEGORIES = new Set([
+  'personal_preference',
+  'activity_preference',
+  'important_detail',
+  'plan_intention',
+  'health_info',
+  'career_info',
+  'custom_misc',
+]);
+
 export const CATEGORY_TO_RULE_TYPE = {
   decision: 'architecture',
   workflow: 'workflow',

@@ -66,6 +66,87 @@ export function splitPreferences(cards) {
   return { user_preferences: prefs, knowledge_cards: other };
 }
 
+/**
+ * F-055 bug C2 — perception relatedness gate (language-agnostic).
+ *
+ * Before F-055, `related_decision` perception signals fired whenever any
+ * tag overlapped between the new card and an existing one — which
+ * mis-fires on generic tags that happen to be shared (observed
+ * 2026-04-18: writing a "beef noodle recipe" pulled a "pgvector
+ * decision" because both had a generic tag).
+ *
+ * Deliberately NO hardcoded stop-word list here. We prefer a semantic
+ * similarity check using the daemon's own embedder (E5-multilingual,
+ * handles 100+ languages). Callers pass in `embedFn`+`cosineFn`; if
+ * either is absent we fall back to a minimal length-only filter (tags
+ * with <3 chars are skipped). The embedding path lets the gate scale
+ * to every language the embedder supports without maintaining per-lang
+ * stop-tag dictionaries.
+ *
+ * @param {object} params
+ * @param {string} params.newText         - title+summary of the new card
+ * @param {string} params.candidateText   - title+summary of the existing card
+ * @param {string[]} [params.sharedTags]  - overlapping tags (informational)
+ * @param {object} [opts]
+ * @param {Function} [opts.embedFn]       - async (text) => Float32Array
+ * @param {Function} [opts.cosineFn]      - (a, b) => number in [-1, 1]
+ * @param {number}  [opts.threshold=0.55]
+ * @returns {Promise<{ related: boolean, similarity: number, reason: string }>}
+ */
+export { isSemanticallyRelated } from '../_shared/semantic-related.mjs';
+
+/**
+ * F-055 bug A — gate persona (`user_preferences`) injection by relevance.
+ *
+ * Before F-055, every `awareness_init` blindly injected the most recent
+ * `personal_preference` / `activity_preference` / `important_detail` /
+ * `career_info` cards into `<who-you-are>`, polluting the agent's context
+ * with cross-topic persona (e.g. "user loves beef noodles" leaking into
+ * a daemon-perf debug session).
+ *
+ * Strategy:
+ *  - If `focus` (current query) is non-empty: require BM25 relevance OR
+ *    high confidence. A persona card is kept when its id appears in the
+ *    BM25-search result set for this focus, OR its confidence ≥ 0.9
+ *    (long-term preferences we trust cross-topic).
+ *  - If `focus` is empty: only keep `confidence ≥ 0.9` cards. These are
+ *    the "high-signal personas" worth surfacing unconditionally.
+ *  - Always cap at `maxPersonaCards` (default 3).
+ *
+ * Safe fallback: if `indexer.searchKnowledge` is unavailable OR throws,
+ * degrade to the confidence filter only.
+ */
+export function filterPersonaByRelevance(personaCards, indexer, focus, opts = {}) {
+  const maxCards = opts.maxPersonaCards ?? 3;
+  const highConfidence = opts.highConfidenceThreshold ?? 0.9;
+
+  if (!Array.isArray(personaCards) || personaCards.length === 0) return [];
+
+  const normalizedFocus = typeof focus === 'string' ? focus.trim() : '';
+
+  if (!normalizedFocus) {
+    return personaCards
+      .filter((c) => (c?.confidence ?? 0) >= highConfidence)
+      .slice(0, maxCards);
+  }
+
+  let relevantIds = new Set();
+  if (indexer && typeof indexer.searchKnowledge === 'function') {
+    try {
+      const matched = indexer.searchKnowledge(normalizedFocus, { limit: 50 });
+      for (const m of matched) {
+        if (m?.id) relevantIds.add(m.id);
+      }
+    } catch {
+      relevantIds = new Set();
+    }
+  }
+
+  return personaCards
+    .filter((c) => relevantIds.has(c?.id) || (c?.confidence ?? 0) >= highConfidence)
+    .slice(0, maxCards);
+}
+
 export function synthesizeRules(cards, maxRules = 30) {
   const buckets = {};
   for (const card of cards) {
@@ -100,10 +181,23 @@ export function synthesizeRules(cards, maxRules = 30) {
 
 export function extractActiveSkills(cards, indexer) {
   // F-032: Prefer dedicated skills table
+  // F-059: order by (growth_stage weight × decay_score) descending so
+  //        evergreen > budding > seedling within each decay bucket.
+  //        Seedling/budding are NOT filtered — weight-demoted so they
+  //        can still surface as "in-progress reference" per user pref.
   if (indexer) {
     try {
       const skills = indexer.db.prepare(
-        "SELECT * FROM skills WHERE status = 'active' AND decay_score > 0.3 ORDER BY decay_score DESC LIMIT 10"
+        `SELECT *,
+          CASE COALESCE(growth_stage, 'seedling')
+            WHEN 'evergreen' THEN 1.0
+            WHEN 'budding'   THEN 0.6
+            ELSE 0.3
+          END AS _stage_weight
+         FROM skills
+         WHERE status = 'active' AND decay_score > 0.3
+         ORDER BY (_stage_weight * decay_score) DESC
+         LIMIT 10`
       ).all();
       if (skills.length > 0) {
         return skills.map((s) => {
@@ -112,11 +206,18 @@ export function extractActiveSkills(cards, indexer) {
             try { methods = JSON.parse(s.methods); } catch { methods = []; }
           }
           if (!Array.isArray(methods)) methods = [];
+          let pitfalls = [];
+          if (s.pitfalls) { try { pitfalls = JSON.parse(s.pitfalls); } catch {} }
+          let verification = [];
+          if (s.verification) { try { verification = JSON.parse(s.verification); } catch {} }
           return {
             id: s.id,
             title: s.name || '',
             summary: s.summary || '',
             methods,
+            pitfalls: Array.isArray(pitfalls) ? pitfalls : [],
+            verification: Array.isArray(verification) ? verification : [],
+            growth_stage: s.growth_stage || 'seedling',
             decay_score: s.decay_score,
             usage_count: s.usage_count,
           };

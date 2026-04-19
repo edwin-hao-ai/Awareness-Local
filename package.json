@@ -1,6 +1,6 @@
 {
   "name": "@awareness-sdk/local",
-  "version": "0.8.0",
+  "version": "0.9.7",
   "description": "Local-first AI agent memory system. No account needed.",
   "license": "Apache-2.0",
   "type": "module",
@@ -43,6 +43,8 @@
   "files": [
     "bin/",
     "src/",
+    "scripts/card-quality-report.mjs",
+    "scripts/clean-noise-cards.mjs",
     "awareness-spec.json",
     "LICENSE",
     "README.md",
@@ -60,6 +62,6 @@
     "benchmark:universal:robust": "node bin/awareness-local.mjs benchmark --project ../../tests/memory-benchmark/projects/universal-core --dataset ../../tests/memory-benchmark/datasets/universal_robust.jsonl --backend builtin --reindex --report ../../tests/memory-benchmark/reports/universal_robust_builtin.json --markdown-report ../../tests/memory-benchmark/reports/universal_robust_builtin.md",
     "start": "node bin/awareness-local.mjs start",
     "postinstall": "node install-transformers.mjs",
-    "prepublishOnly": "node -e \"const fs=require('fs'),p=require('path');const files=['src/core/config.mjs','src/core/cloud-sync.mjs','src/daemon.mjs'];let ok=true;for(const f of files){const c=fs.readFileSync(p.join(__dirname,f),'utf8');const defaults=[...c.matchAll(/api_base[^']*'([^']+)'/g)].map(m=>m[1]);for(const d of defaults){if(d.includes('localhost')||d.includes('127.0.0.1')){console.error('PUBLISH BLOCKED: '+f+' has localhost in default api_base: '+d);ok=false}}}if(!ok)process.exit(1);console.log('Pre-publish check passed: no localhost in default api_base values')\""
+    "prepublishOnly": "node scripts/prepublish-gate.mjs"
   }
 }

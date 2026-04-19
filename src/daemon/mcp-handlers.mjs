@@ -1,4 +1,5 @@
 import { buildContextXml } from '../harness-builder.mjs';
+import { PERSONAL_CARD_CATEGORIES } from './constants.mjs';
 import {
   buildRecallFullContent,
   buildRecallNoQueryContent,
@@ -7,6 +8,7 @@ import {
 } from './mcp-contract.mjs';
 import {
   extractActiveSkills,
+  filterPersonaByRelevance,
   splitPreferences,
   synthesizeRules,
 } from './helpers.mjs';
@@ -91,7 +93,19 @@ export function buildInitResult({
 
   const { rules, rule_count } = synthesizeRules(allActiveCards);
   const activeSkills = extractActiveSkills(allActiveCards, indexer);
-  const { user_preferences, knowledge_cards: otherCards } = splitPreferences(recentCards);
+
+  // F-055 bug A — pull persona candidates from the full active pool
+  // (not just BM25-ranked `recentCards`) so confidence-filtered personas
+  // still surface when the query doesn't directly match them, then gate
+  // by relevance OR high confidence. Category list lives in
+  // `constants.PERSONAL_CARD_CATEGORIES` (single source of truth).
+  const personaCandidates = allActiveCards.filter(
+    (c) => c && typeof c.category === 'string' && PERSONAL_CARD_CATEGORIES.has(c.category),
+  );
+  const gatedPersona = filterPersonaByRelevance(personaCandidates, indexer, focus);
+
+  const { knowledge_cards: otherCards } = splitPreferences(recentCards);
+  const user_preferences = gatedPersona;
 
   // Build lightweight perception signals for init (staleness + pitfall guards)
   const initPerception = _buildInitPerception(indexer, allActiveCards);
@@ -297,6 +311,7 @@ export async function buildRecallResult({ search, args, mode = 'local', indexer 
         tokenBudget,
         limit,
         strategy,
+        hyde_hint: args.hyde_hint,  // F-060 · client-provided HyDE passthrough
       });
       summaries = Array.isArray(out?.results) ? out.results : [];
 

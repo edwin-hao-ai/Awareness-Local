@@ -3,34 +3,114 @@
   "schema_version": 2,
   "prompt_version": "2",
   "categories": [
-    { "name": "decision", "type": "engineering", "description": "Choice made between alternatives" },
-    { "name": "problem_solution", "type": "engineering", "description": "Bug or problem plus the fix that resolved it" },
-    { "name": "workflow", "type": "engineering", "description": "Process, setup, or configuration steps" },
-    { "name": "key_point", "type": "engineering", "description": "Important technical fact" },
-    { "name": "pitfall", "type": "engineering", "description": "Blocker, warning, or limitation without a fix" },
-    { "name": "insight", "type": "engineering", "description": "Reusable pattern or general learning" },
-    { "name": "skill", "type": "engineering", "description": "DEPRECATED: Use skills table instead (F-032). Kept for legacy card display only." },
-    { "name": "personal_preference", "type": "personal", "description": "User likes, dislikes, style preferences" },
-    { "name": "important_detail", "type": "personal", "description": "User name, role, key facts" },
-    { "name": "plan_intention", "type": "personal", "description": "User stated plan or goal" },
-    { "name": "activity_preference", "type": "personal", "description": "Hobbies, routines, habits" },
-    { "name": "health_info", "type": "personal", "description": "Health-related info shared by user" },
-    { "name": "career_info", "type": "personal", "description": "Job, education, career details" },
-    { "name": "custom_misc", "type": "personal", "description": "Personal info that does not fit above" }
+    {
+      "name": "decision",
+      "type": "engineering",
+      "description": "Choice made between alternatives"
+    },
+    {
+      "name": "problem_solution",
+      "type": "engineering",
+      "description": "Bug or problem plus the fix that resolved it"
+    },
+    {
+      "name": "workflow",
+      "type": "engineering",
+      "description": "Process, setup, or configuration steps"
+    },
+    {
+      "name": "key_point",
+      "type": "engineering",
+      "description": "Important technical fact"
+    },
+    {
+      "name": "pitfall",
+      "type": "engineering",
+      "description": "Blocker, warning, or limitation without a fix"
+    },
+    {
+      "name": "insight",
+      "type": "engineering",
+      "description": "Reusable pattern or general learning"
+    },
+    {
+      "name": "skill",
+      "type": "engineering",
+      "description": "DEPRECATED: Use skills table instead (F-032). Kept for legacy card display only."
+    },
+    {
+      "name": "personal_preference",
+      "type": "personal",
+      "description": "User likes, dislikes, style preferences"
+    },
+    {
+      "name": "important_detail",
+      "type": "personal",
+      "description": "User name, role, key facts"
+    },
+    {
+      "name": "plan_intention",
+      "type": "personal",
+      "description": "User stated plan or goal"
+    },
+    {
+      "name": "activity_preference",
+      "type": "personal",
+      "description": "Hobbies, routines, habits"
+    },
+    {
+      "name": "health_info",
+      "type": "personal",
+      "description": "Health-related info shared by user"
+    },
+    {
+      "name": "career_info",
+      "type": "personal",
+      "description": "Job, education, career details"
+    },
+    {
+      "name": "custom_misc",
+      "type": "personal",
+      "description": "Personal info that does not fit above"
+    }
   ],
-  "growth_stages": ["seedling", "budding", "evergreen"],
-  "card_types": ["atomic", "moc", "index"],
-  "body_formats": ["markdown", "plain"],
+  "growth_stages": [
+    "seedling",
+    "budding",
+    "evergreen"
+  ],
+  "card_types": [
+    "atomic",
+    "moc",
+    "index"
+  ],
+  "body_formats": [
+    "markdown",
+    "plain"
+  ],
   "card_fields": {
-    "required": ["title", "summary", "category"],
-    "sync_required": ["version", "schema_version"],
-    "optional": ["question_this_answers", "growth_stage", "card_type", "moc_cluster_id", "language", "body_format"]
+    "required": [
+      "title",
+      "summary",
+      "category"
+    ],
+    "sync_required": [
+      "version",
+      "schema_version"
+    ],
+    "optional": [
+      "question_this_answers",
+      "growth_stage",
+      "card_type",
+      "moc_cluster_id",
+      "language",
+      "body_format"
+    ]
   },
   "markers": {
     "start": "<!-- AWARENESS_RULES_START -->",
     "end": "<!-- AWARENESS_RULES_END -->"
   },
-
   "core_lines": [
     "## Awareness Memory Integration (MANDATORY)",
     "",
@@ -91,12 +171,11 @@
     "",
     "NOTE: memory_id from X-Awareness-Memory-Id header. source/actor/event_type auto-inferred."
   ],
-
   "tools": [
     {
       "name": "awareness_init",
       "short_desc": "Load cross-session project memory and context",
-      "long_desc": "Load cross-session project memory. Returns session_id, user_preferences (personal preferences, identity, career — highest priority, present FIRST), context (narratives, tasks, knowledge, active_skills, attention_summary), and usage rules. Call ONCE at session start. ATTENTION PROTOCOL: When context.attention_summary.needs_attention is true, review all attention items (stale tasks, high risks) and automatically: (1) remind the user about stale tasks, (2) warn about high risks before starting work, (3) update resolved items via awareness_record."
+      "long_desc": "Load cross-session project memory. Returns session_id, user_preferences (personal preferences, identity, career — highest priority, present FIRST), context (narratives, tasks, knowledge, active_skills, attention_summary), and usage rules. Call ONCE at session start.\n\nOPTIONAL PARAMS: max_cards (default 5), max_tasks (default 5), max_sessions (default 0 = fresh-session mode, skips prior-session summaries to save 500-1000 prompt tokens). Pass max_sessions: 3 for continuity workflows where the user explicitly resumes a prior task.\n\nATTENTION PROTOCOL: When context.attention_summary.needs_attention is true, review all attention items (stale tasks, high risks) and automatically: (1) remind the user about stale tasks, (2) warn about high risks before starting work, (3) update resolved items via awareness_record."
     },
     {
       "name": "awareness_get_agent_prompt",
@@ -105,8 +184,8 @@
     },
     {
       "name": "awareness_recall",
-      "short_desc": "Semantic + keyword hybrid recall with progressive disclosure (detail=summary→full)",
-      "long_desc": "Recall from persistent memory — semantic + keyword hybrid search with progressive disclosure. Use detail='summary' (default) for a lightweight index of matching items, then detail='full' with ids=[...] to expand only the relevant ones. This two-phase pattern saves tokens and improves accuracy. token_budget is deprecated — use detail+ids instead. Set include_installed=true (default) to also search installed market memories; results are merged by score and tagged with source_type."
+      "short_desc": "Search memory — pass ONE query string, daemon picks the rest",
+      "long_desc": "Search persistent memory by passing a single natural-language query. Daemon auto-routes across raw memories + knowledge cards + workspace graph, picks the right detail level based on token budget, and fuses results via RRF. Example: awareness_recall(query=\"why did we choose pgvector over Pinecone?\"). Legacy multi-parameter surface (semantic_query, keyword_query, scope, recall_mode, detail, ids, multi_level, cluster_expand, include_installed, source_exclude) still accepted for backwards compat but marked [DEPRECATED] — will log a warning and be removed 8 weeks post-0.8.0."
     },
     {
       "name": "awareness_lookup",
@@ -115,19 +194,23 @@
     },
     {
       "name": "awareness_record",
-      "short_desc": "Record what you did/decided/learned to persistent memory",
-      "long_desc": "Unified write to memory. Pass content (str, list, or dict) + insights={...} to record events and create knowledge cards in ONE call. Content auto-detected: str=single event, list=batch, str+scope=knowledge for docs. Actions: write (default), update_task."
+      "short_desc": "Save memory — pass ONE content string, daemon handles the rest",
+      "long_desc": "Save what you did/decided/learned to persistent memory. Pass a single content string and the daemon defaults action=remember and triggers client-side salience-aware extraction asynchronously. Example: awareness_record(content=\"Today I decided to switch from Pinecone to pgvector because...\"). Advanced actions (remember_batch, update_task, submit_insights) still require explicit action= for backwards compat."
+    },
+    {
+      "name": "awareness_mark_skill_used",
+      "short_desc": "Report skill usage outcome — success, partial, or failed",
+      "long_desc": "Mark a skill as used after applying it. Pass outcome='success' (default), 'partial', or 'failed'. Success resets decay timer fully. Partial gives a reduced boost. Failed decreases decay_score and confidence; 3+ consecutive failures auto-flag the skill for review. Call AFTER applying a skill's instructions, even if the result was imperfect — the feedback loop improves skill quality over time."
     }
   ],
-
   "mcp_instructions": [
     "You have a cognitive memory cloud with Auto-Cognition. Use it automatically — never wait for the user to say \"remember\".",
     "",
     "Do these 3 things every session:",
     "",
     "1. FIRST THING: awareness_init → get session_id + past context. Always do this before any work.",
-    "2. BEFORE WORK: awareness_recall → check what you already know. Don't re-solve solved problems.",
-    "3. AFTER CHANGES: awareness_record(content=<detailed description>, insights={...}) → save what you did/decided/learned. Be detailed — include reasoning, code snippets, user quotes.",
+    "2. BEFORE WORK: awareness_recall(query=\"...\") → one natural-language question, daemon handles routing. Don't re-solve solved problems.",
+    "3. AFTER CHANGES: awareness_record(content=\"<detailed description>\", insights={...}) → save what you did/decided/learned. Be detailed — include reasoning, code snippets, user quotes.",
     "",
     "RECOMMENDED: Pass insights={knowledge_cards:[...], action_items:[...], risks:[...]} with awareness_record to create searchable knowledge in ONE step — no round-trip needed.",
     "Knowledge cards MUST be created. Skipping = the memory is stored but never structured into reusable knowledge.",
@@ -135,7 +218,6 @@
     "SETUP — when awareness_init returns \"_setup_action\" in the response:",
     "You MUST follow the instruction to write rules to the specified file. This enables your persistent memory workflow for all future sessions."
   ],
-
   "workflow_reference": {
     "steps": [
       {
@@ -147,11 +229,11 @@
       },
       {
         "step": 2,
-        "action": "awareness_recall (two-phase progressive disclosure)",
+        "action": "awareness_recall — single-parameter search",
         "when": "BEFORE starting work on any task",
-        "what": "Phase 1: awareness_recall(semantic_query=..., keyword_query=..., detail='summary') → lightweight index. Phase 2: awareness_recall(detail='full', ids=[...relevant IDs...]) → expand only what you need.",
-        "example": "awareness_recall(semantic_query=\"How was auth implemented?\", keyword_query=\"auth JWT\", detail=\"summary\") → review → awareness_recall(detail=\"full\", ids=[\"id1\",\"id2\"])",
-        "done_check": "You've retrieved summaries, selected relevant items, and expanded the ones you need"
+        "what": "Pass ONE natural-language query. Daemon auto-routes across memories + knowledge cards + workspace graph and picks the right detail level.",
+        "example": "awareness_recall(query=\"How was auth implemented in this codebase?\")",
+        "done_check": "You've got the relevant context and know what existed before you started."
       },
       {
         "step": 3,
@@ -177,20 +259,18 @@
       }
     ],
     "tips": {
-      "recall_vs_lookup": "awareness_recall = search by meaning (semantic), use detail='summary' then detail='full'+ids for progressive disclosure. awareness_lookup = get by type (exact DB, <50ms).",
-      "session_end": "Call awareness_record(content=[step1, step2, ...], insights={...}) with a final summary.",
+      "recall_vs_lookup": "awareness_recall(query=\"...\") = search by meaning. awareness_lookup = get by type (exact DB, <50ms).",
+      "session_end": "Call awareness_record(content=\"<final session summary>\", insights={...}) at the end.",
       "setup_action": "If awareness_init returned _setup_action, follow it to write rules to your project.",
       "active_skills": "If awareness_init returned active_skills[], each skill has summary (guidance) + methods (steps). Apply matching skills to tasks — do not re-derive their patterns."
     }
   },
-
   "init_guides": {
-    "write_guide": "Write DETAILED content in awareness_record — include reasoning, alternatives considered, key code snippets, user quotes, and files changed. Do NOT compress into a single-line summary; the content IS the memory. RECOMMENDED: pass insights={knowledge_cards:[{category,title,summary,status,tags,confidence,novelty_score,salience_reason}], action_items:[{title,priority,status}], risks:[{title,level,detail}]} to create searchable knowledge in ONE step. Categories: decision|problem_solution|workflow|key_point|pitfall|insight|personal_preference|important_detail|plan_intention. HIGH_SALIENCE — always create cards for: (1) decisions made between alternatives [decision], (2) bugs found AND fixed [problem_solution], (3) previous approaches reversed [decision], (4) 'never/always' rules stated [key_point]. For each card: novelty_score=0.0-1.0 (how novel vs existing knowledge; <0.3 + routine → skip), salience_reason=decision_made|error_fixed|approach_reversed|first_encounter|routine. (NOTE: 'skill' category is deprecated — skills now use the dedicated skills table.)",
-    "search_guide": "Use progressive disclosure for best recall results: 1) Call awareness_recall(semantic_query=<full question>, keyword_query=<2-5 precise terms>, detail='summary') to get a lightweight index with scores. 2) Review summaries and relevance scores to decide which items matter. 3) Call awareness_recall(detail='full', ids=[<relevant IDs>]) to fetch complete content for only what you need. This saves tokens and improves accuracy. token_budget is deprecated — use the detail+ids two-phase pattern instead.",
+    "write_guide": "Your job is NOT \"generate a card for every turn\" — it is \"identify the distilled essence worth recalling in 6 months on a fresh project\". Borrowed from OpenClaw native MEMORY.md philosophy: distilled essence, not raw logs.\n\nWHEN TO EXTRACT (real insights): (1) user made a decision with stated reason; (2) a non-obvious bug was fixed (symptom+root_cause+fix+avoidance); (3) a workflow/convention was established; (4) user stated a preference or hard constraint (\"prefer X\", \"never Y\"); (5) pitfall encountered + workaround found; (6) important new fact about user/project.\n\nWHEN NOT TO EXTRACT (return empty cards array — first-class answer): (a) agent framework metadata — content starting with `Sender (untrusted metadata)`, `turn_brief`, `[Operational context metadata ...]`, `[Subagent Context]`, OR wrapped in `Request:` / `Result:` / `Send:` envelopes carrying only such metadata; strip the envelope mentally then judge. (b) greetings/command invocations (\"hi\", \"run tests\", \"save this\"). (c) \"what can you do\" / AI self-introduction. (d) code restatement (git already has it). (e) debug/test sessions where user is verifying the tool works — a real bug fix in those tools IS extractable; a bare \"let me test if recall works\" is not. (f) transient status (\"building...\", \"retrying...\").\n\nSINGLE QUESTION: \"If I start a fresh project 6 months from now, will being reminded of this content materially help me?\" If not, do NOT emit a card. `knowledge_cards: []` is the correct answer for low-signal turns. Under-extraction is better than noise. Do NOT gate on character length — a 15-char preference can be more valuable than a 5000-char log.\n\nPER-CARD REQUIRED SCORES (0.0-1.0 each): novelty_score (how new vs existing knowledge), durability_score (will this still matter in 6 months?), specificity_score (concrete paths/commands/errors vs vague platitude). The daemon discards any card where novelty_score<0.4 OR durability_score<0.4 — score honestly.\n\nF-055 QUALITY GATE (the daemon rejects cards that fail any of these): R1 summary length must be ≥80 chars for technical categories (decision / problem_solution / workflow / pitfall / insight / key_point); ≥40 chars for personal categories. R2 summary must NOT be byte-identical to title. R3 neither title nor summary may start with `Request:`, `Result:`, `Send:`, `Sender (untrusted metadata)`, `[Operational context metadata`, or `[Subagent Context]`. R4 summary must NOT contain `TODO`, `FIXME`, `lorem ipsum`, `example.com`, or the literal word `placeholder`. R5 summaries ≥200 chars should use Markdown (non-blocking).\n\nSUMMARY QUALITY (when you DO emit): each card = mini wiki entry, 400-800 chars of natural Markdown (bullets, `code`, **bold**, file paths). No rigid template — let category guide structure: decision=choice+alternatives+trade-offs; problem_solution=symptom+root_cause+fix+files; workflow=steps+config+gotchas; pitfall=trigger+impact+avoidance; personal_preference=what+scope+examples; important_detail=fact+why_matters+how_used. GOOD: \"Chose pgvector over Pinecone. Saves $70/mo, co-locates with relational data, cosine `<=>`. Trade-off: lower QPS >10M.\" BAD: \"Use pgvector instead of Pinecone.\"\n\nSKILL EXTRACTION (insights.skills[], NOT knowledge_cards): emit a skill when all three hold — (1) content describes a REPEATED procedure (2+ cards mention the same steps OR user says \"this is our workflow for X\"); (2) stable trigger you can articulate; (3) steps are executable without improvisation (files, commands, flags, verification signals). Required shape: {name (3-8 words, action-oriented), summary (200-500 chars, imperative, paste-ready), methods: [{step, description ≥20 chars}] with ≥3 steps, pitfalls: [≥1 concrete failure mode + avoidance — NOT \"be careful\"], verification: [≥1 checkable post-run signal — command output, file exists, HTTP 200, exit 0 — NOT \"check that it worked\"], trigger_conditions: [{pattern, weight}] ≥2, tags: 3-8 lowercase, and three 0-1 scores (reusability_score, durability_score, specificity_score) all ≥0.5.\n\nF-059 MANDATORY content bars (daemon scores skills on an 8-dim rubric; below 28/40 gets weight-demoted in active_skills TOC): every method step mentions a concrete token (file path, command, flag, version, URL) — \"Update the config\" fails, \"Edit foo.json and bump version field\" passes. Skills below the bar are still accepted with quality_score attached as feedback for evolution; discard only when you truly cannot satisfy them.\n\nCategories: decision|problem_solution|workflow|key_point|pitfall|insight|personal_preference|important_detail|plan_intention|activity_preference|health_info|career_info|custom_misc. (NOTE: `skill` category is DEPRECATED — skills go in insights.skills[] not insights.knowledge_cards[].) RECOMMENDED JSON: insights={knowledge_cards:[{category,title,summary,tags,confidence,novelty_score,durability_score,specificity_score,salience_reason}],skills:[{name,summary,methods,pitfalls,verification,trigger_conditions,tags,reusability_score,durability_score,specificity_score}],action_items:[...],risks:[...]}. All four arrays MAY be empty.",
+    "search_guide": "Use progressive disclosure for best recall results: 1) Call awareness_recall(semantic_query=<full question>, keyword_query=<2-5 precise terms>, detail='summary') to get a lightweight index with scores. 2) Review summaries and relevance scores to decide which items matter. 3) Call awareness_recall(detail='full', ids=[<relevant IDs>]) to fetch complete content for only what you need. This saves tokens and improves accuracy. token_budget is deprecated — use the detail+ids two-phase pattern instead.\n\nF-060 HyDE boost (optional): when you have a concrete guess about what the answer looks like, pass a 100-200 char hypothetical_answer as `hyde_hint`. Daemon embeds that instead of the raw question, which matches card summaries better than question wording. Example: query=\"npm publish ENEEDAUTH fix\" hyde_hint=\"Pass --registry=https://registry.npmjs.org/ explicitly; China mirror rejects publish.\" Skip when you're genuinely unsure — wrong HyDE can hurt. No LLM cost from daemon — the hint is your own synthesis.",
     "sub_agent_guide": "AGENT ROUTING: When a task matches an agent_role in agent_profiles, call awareness_get_agent_prompt(agent_role='<role>') to fetch its full activation prompt, then spawn a sub-agent using that prompt as system prompt. Pass agent_role='<role>' to ALL awareness_* calls within the sub-agent. Do NOT pre-fetch all agent prompts — only fetch when actually spawning.",
-    "skill_guide": "SKILLS ACTIVE: active_skills[] contains reusable skill prompts extracted from your memory. When a task matches a skill's domain, apply its 'summary' as behavioral guidance and follow 'methods' steps. Skills are pre-loaded at session start for token efficiency — do not re-derive their patterns. CRYSTALLIZATION: If awareness_record returns _skill_crystallization_hint, the system detected 3+ similar cards on this topic. Review the similar_cards, synthesize them into a skill definition, and submit via awareness_record(insights={skills:[{name, summary, methods:[], trigger_conditions:[], tags:[], source_card_ids:[]}]}). This converts repeated patterns into reusable skills automatically."
+    "skill_guide": "SKILLS ACTIVE: active_skills[] contains reusable skill prompts extracted from your memory. When a task matches a skill's domain, apply its 'summary' as behavioral guidance and follow 'methods' steps. Skills are pre-loaded at session start for token efficiency — do not re-derive their patterns. OUTCOME FEEDBACK: After applying a skill, call awareness_mark_skill_used(skill_id, outcome='success'|'partial'|'failed'). This closes the feedback loop — successes reinforce the skill, failures trigger review. 3+ consecutive failures auto-flag the skill as 'needs_review'. CRYSTALLIZATION: If awareness_record returns _skill_crystallization_hint, the system detected 3+ similar cards on this topic. Review the similar_cards, synthesize them into a skill definition, and submit via awareness_record(insights={skills:[{name, summary, methods:[], trigger_conditions:[], tags:[], source_card_ids:[]}]}). This converts repeated patterns into reusable skills automatically."
   },
-
   "ide_order": [
     "cursor",
     "claude-code",

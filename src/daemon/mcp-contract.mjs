@@ -194,6 +194,14 @@ export function getToolDefinitions() {
             default: 5000,
           },
           limit: { type: 'number', default: 10, maximum: 30 },
+          hyde_hint: {
+            type: 'string',
+            description:
+              'OPTIONAL HyDE boost: a 100-200 char hypothetical answer to the query, as if it were already in the knowledge base. ' +
+              'If you know a concrete answer the user is asking for, write it here — daemon embeds it instead of the raw question, ' +
+              'which matches card summaries better. Ignore if uncertain; empty string disables. ' +
+              'Example: query="npm ENEEDAUTH fix" hyde_hint="Pass --registry=https://registry.npmjs.org/ explicitly; China mirror rejects publish."',
+          },
 
           // --- [DEPRECATED] Legacy multi-parameter surface (kept for compatibility) ---
           // These still work but log a deprecation warning. Remove after 8 weeks (F-053 Phase 5).
@@ -215,36 +223,43 @@ export function getToolDefinitions() {
     {
       name: 'awareness_record',
       description:
-        'Save a memory. Pass ONE content string — daemon handles extraction asynchronously via your LLM. ' +
-        'Example: awareness_record({ content: "Today I decided to switch from Pinecone to pgvector because..." }).',
+        'Save to memory. Pass whatever you have — the server infers what to do:\n' +
+        '  · `content` (string or string[]) → save as a new memory; attach optional `insights` {knowledge_cards, action_items, risks, skills} inline to skip the extraction round-trip.\n' +
+        '  · `items: [...]` → batch save multiple memories.\n' +
+        '  · `task_id` + `status` → update an existing task.\n' +
+        '  · `insights` alone → submit pre-extracted insights (no new memory).\n' +
+        'Examples: awareness_record({ content: "Decided pgvector over Pinecone…", insights: {knowledge_cards: [...]} }); awareness_record({ task_id: "task_abc", status: "done" }).',
       inputSchema: {
         type: 'object',
         properties: {
           content: {
-            type: 'string',
             description:
-              'Memory content in markdown. The ONLY parameter callers need — daemon defaults ' +
-              'action=remember and triggers async salience-aware extraction.',
+              'Memory content (string or array of strings for batch). The primary knob — pass this when recording a new observation / decision / step.',
+          },
+          insights: {
+            type: 'object',
+            description:
+              'Pre-extracted structured insights. Include knowledge_cards[], action_items[], risks[], skills[], completed_tasks[]. When supplied alongside `content`, the daemon persists both in one call (no _extraction_instruction round-trip).',
+          },
+          items: {
+            type: 'array',
+            description: 'Batch items: array of {content: "..."} objects. Used instead of a string `content` when recording multiple memories at once.',
           },
 
-          // --- [DEPRECATED] Legacy multi-parameter surface ---
-          action: {
-            type: 'string',
-            enum: RECORD_ACTION_VALUES,
-            description: '[DEPRECATED] Defaults to "remember" when content is provided. Other actions (update_task, submit_insights, remember_batch) still require explicit action.',
-          },
+          // Task-update surface
+          task_id: { type: 'string', description: 'Task ID (required for task updates).' },
+          status: { type: 'string', description: 'New task status (e.g. "done").' },
+
+          // Metadata
           title: { type: 'string', description: 'Optional memory title (auto-generated if absent).' },
-          items: { type: 'array', description: 'Batch items for remember_batch (explicit action required).' },
-          insights: { type: 'object', description: 'Pre-extracted knowledge cards / tasks / risks.' },
           session_id: { type: 'string' },
           agent_role: { type: 'string' },
           event_type: { type: 'string' },
           tags: { type: 'array', items: { type: 'string' } },
-          task_id: { type: 'string' },
-          status: { type: 'string' },
           source: { type: 'string', description: 'Client source identifier (e.g. desktop, openclaw-plugin, mcp).' },
         },
-        required: ['content'],
+        // Intentionally NOT marking anything required — the server auto-infers
+        // the path from the presence of content / items / insights / task_id.
       },
     },
     {
