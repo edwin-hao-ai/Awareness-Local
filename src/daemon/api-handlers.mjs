@@ -451,14 +451,27 @@ export function apiSyncStatus(daemon, _req, res) {
   const cloud = config.cloud || {};
   const history = daemon.cloudSync ? daemon.cloudSync.getSyncHistory() : [];
 
+  // Previously last_push_at/last_pull_at read from a config field that's
+  // never actually written — CloudSync records events into sync_state
+  // via recordSyncEvent() but doesn't mirror them back to config.json.
+  // Derive the two scalars from the history the same source the UI sees,
+  // so the status panel no longer shows "Never synced" despite a recent
+  // push. Config-level override still wins if the field is set explicitly.
+  const deriveLast = (direction) => {
+    for (const h of history) {
+      if (h?.details?.direction === direction && h?.timestamp) return h.timestamp;
+    }
+    return null;
+  };
+
   return jsonResponse(res, {
     cloud_enabled: !!cloud.enabled,
     api_base: cloud.api_base || null,
     memory_id: cloud.memory_id || null,
     memory_name: cloud.memory_name || null,
     auto_sync: cloud.auto_sync ?? true,
-    last_push_at: cloud.last_push_at || null,
-    last_pull_at: cloud.last_pull_at || null,
+    last_push_at: cloud.last_push_at || deriveLast('push'),
+    last_pull_at: cloud.last_pull_at || deriveLast('pull'),
     history,
   });
 }
@@ -1111,6 +1124,38 @@ export async function apiHybridSearch(daemon, _req, res, url) {
 export function apiGetKnowledgeCard(daemon, _req, res, cardId) {
   if (!daemon.indexer) {
     return jsonResponse(res, { error: 'Indexer not available' }, 503);
+  }
+
+  // Tag pseudo-topic support (id prefix `tag_<tagname>`). The sidebar lists
+  // both MOC cards and tag aggregations as topics; when a user clicks a
+  // tag topic we need the authoritative member list from the daemon
+  // rather than relying on the client's capped 50-card snapshot. Without
+  // this fallback, tag topics whose members are older than the top-50
+  // render as "indexing… then blank" because the client never fetches
+  // them from SQLite directly.
+  if (typeof cardId === 'string' && cardId.startsWith('tag_')) {
+    const tag = cardId.slice(4).trim().toLowerCase();
+    if (!tag) return jsonResponse(res, { error: 'Empty tag' }, 400);
+    const rows = daemon.indexer.db.prepare(
+      `SELECT id, title, summary, category, growth_stage, confidence, created_at, tags
+       FROM knowledge_cards
+       WHERE status = 'active'
+         AND (card_type IS NULL OR card_type != 'moc')
+         AND tags LIKE ?
+       ORDER BY created_at DESC
+       LIMIT 500`
+    ).all(`%"${tag}"%`);
+    const members = rows.map((row) => ({ ...row, tags: _safeJsonParse(row.tags, []) }));
+    return jsonResponse(res, {
+      id: cardId,
+      card_type: 'tag',
+      title: tag.replace(/\b\w/g, (c) => c.toUpperCase()),
+      tags: [tag],
+      source_memories: [],
+      related_cards: [],
+      evolution_chain: [],
+      members,
+    });
   }
 
   const card = daemon.indexer.db

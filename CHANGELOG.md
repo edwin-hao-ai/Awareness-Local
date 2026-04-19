@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.9.10] - 2026-04-19
+
+### Fixed — Wiki tag topic renders blank after "building index" spinner
+- AwarenessClaw sidebar lists tag aggregations (ids like `tag_<name>`) as
+  topics. The client's detail view used to client-side-filter the preloaded
+  50-card snapshot for members. When a tag's member cards lived outside
+  the top-50 (older cards), the filter yielded zero → retried 4× → showed
+  "Daemon is building the tag index, please wait…" for 3.2 s → rendered
+  a blank content pane.
+- Fix: `GET /api/v1/knowledge/<id>` now recognises `tag_<name>` pseudo-ids
+  and runs the same SQL tag-LIKE query `_countMocMembers` uses, returning
+  a `members[]` array backed by the full SQLite table (up to 500). The
+  AwarenessClaw client's `WikiContentArea.tsx` falls through to this
+  endpoint when client-side match returns zero.
+- Tests: `test/api-tag-pseudo-topic.test.mjs` — 4/4.
+
+### Fixed — graph-embedder FK warnings flooding the log
+- `storeGraphEmbedding` now swallows `FOREIGN KEY constraint failed`
+  silently (returns `skipped: 'stale_node'`). The race is between
+  `getUnembeddedGraphNodes()` returning a row and the INSERT landing
+  after workspace-scanner deleted that node; the embedding is stale
+  anyway, so there is nothing to warn about. Previously produced 30+
+  log lines per batch on active workspaces.
+- `embedGraphNodes` counts stale-node returns under `skipped` rather than
+  incrementing `embedded`.
+
+### Fixed — sync_status `last_push_at` always null despite recent pushes
+- CloudSync records events via `recordSyncEvent` into sync_state but never
+  mirrored them back to `config.json`, so `config.cloud.last_push_at`
+  stayed null forever. The /sync/status endpoint now derives the scalar
+  from the most-recent history entry in the matching direction when the
+  config field is missing. UI "Never synced" caption no longer lies when
+  pushes have clearly happened.
+
 ## [0.9.9] - 2026-04-19
 
 ### Fixed — P1: cloud sync cards push silently 404'd on production

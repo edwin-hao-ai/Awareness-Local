@@ -1965,12 +1965,24 @@ Return ONLY JSON: {"title": "...", "summary": "..."}`;
    */
   storeGraphEmbedding(nodeId, vector, modelId) {
     const buf = Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
-    this._stmtUpsertGraphEmbedding.run({
-      node_id: nodeId,
-      vector: buf,
-      model_id: modelId,
-      created_at: nowISO(),
-    });
+    try {
+      this._stmtUpsertGraphEmbedding.run({
+        node_id: nodeId,
+        vector: buf,
+        model_id: modelId,
+        created_at: nowISO(),
+      });
+      return { inserted: true };
+    } catch (err) {
+      // FK violation: node row was deleted between getUnembeddedGraphNodes()
+      // returning it and this INSERT landing (workspace-scanner concurrent
+      // delete). Harmless — the embedding is stale anyway. Stay silent to
+      // avoid flooding the log with dozens of lines per batch.
+      if (err && typeof err.message === 'string' && err.message.includes('FOREIGN KEY')) {
+        return { inserted: false, skipped: 'stale_node' };
+      }
+      throw err;
+    }
   }
 
   /**

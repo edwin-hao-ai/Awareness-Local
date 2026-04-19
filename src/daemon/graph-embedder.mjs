@@ -139,13 +139,17 @@ export async function embedGraphNodes(daemon, options = {}) {
 
       const vectors = await daemon._embedder.embedBatch(validTexts, 'passage', language);
 
-      // Store each embedding
+      // Store each embedding. storeGraphEmbedding now silently swallows FK
+      // violations (stale nodes deleted by workspace-scanner concurrently)
+      // and reports skipped=true — we count those in `skipped` rather than
+      // logging a warn line per occurrence.
       for (let k = 0; k < validIndices.length; k++) {
         const node = batch[validIndices[k]];
         const vector = vectors[k];
         if (vector) {
-          daemon.indexer.storeGraphEmbedding(node.id, vector, modelId);
-          embedded++;
+          const outcome = daemon.indexer.storeGraphEmbedding(node.id, vector, modelId);
+          if (outcome && outcome.inserted) embedded++;
+          else skipped++;
         } else {
           skipped++;
         }
