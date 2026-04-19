@@ -25,7 +25,7 @@ const DEFAULT_CLIENT_SCHEMA = 2;
 export async function performHandshake(http, clientSchema = DEFAULT_CLIENT_SCHEMA) {
   const schema = Number.isInteger(clientSchema) ? clientSchema : DEFAULT_CLIENT_SCHEMA;
   try {
-    const res = await http.get(`/api/v1/sync/handshake?client_schema=${schema}`);
+    const res = await http.get(`/sync/handshake?client_schema=${schema}`);
     if (res.status === 404) {
       // Old backend without handshake — treat as compatible fallback.
       return {

@@ -18,7 +18,7 @@ function makeFakeTransport(responder) {
 describe('performHandshake', () => {
   it('returns compatible for schema 1', async () => {
     const http = createSyncHttp({
-      apiBase: 'https://api.test',
+      apiBase: 'https://api.test/api/v1',
       transport: makeFakeTransport((url) => {
         assert.match(url, /\/api\/v1\/sync\/handshake\?client_schema=1$/);
         return {
@@ -41,7 +41,7 @@ describe('performHandshake', () => {
 
   it('returns compatible for schema 2', async () => {
     const http = createSyncHttp({
-      apiBase: 'https://api.test',
+      apiBase: 'https://api.test/api/v1',
       transport: makeFakeTransport(() => ({
         status: 200,
         body: { compatible: true, cloud_schema_version: 2, client_schema_version: 2, message: 'ok' },
@@ -54,7 +54,7 @@ describe('performHandshake', () => {
 
   it('returns incompatible for schema 999', async () => {
     const http = createSyncHttp({
-      apiBase: 'https://api.test',
+      apiBase: 'https://api.test/api/v1',
       transport: makeFakeTransport(() => ({
         status: 200,
         body: {
@@ -73,7 +73,7 @@ describe('performHandshake', () => {
 
   it('falls back to compatible on 404 (legacy backend)', async () => {
     const http = createSyncHttp({
-      apiBase: 'https://api.test',
+      apiBase: 'https://api.test/api/v1',
       transport: makeFakeTransport(() => ({ status: 404, body: '' })),
     });
     const result = await performHandshake(http, 2);
@@ -83,7 +83,7 @@ describe('performHandshake', () => {
 
   it('handles network errors without throwing', async () => {
     const http = createSyncHttp({
-      apiBase: 'https://api.test',
+      apiBase: 'https://api.test/api/v1',
       transport: async () => {
         throw new Error('ECONNREFUSED');
       },

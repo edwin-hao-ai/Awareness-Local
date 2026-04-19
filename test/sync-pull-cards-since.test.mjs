@@ -19,7 +19,7 @@ describe('pullCardsSince', () => {
   it('includes since and device_id query params and applies returned cards', async () => {
     let capturedUrl = null;
     const http = createSyncHttp({
-      apiBase: 'https://api.test',
+      apiBase: 'https://api.test/api/v1',
       deviceId: 'dev-2',
       transport: makeFakeTransport((url) => {
         capturedUrl = url;
@@ -66,7 +66,7 @@ describe('pullCardsSince', () => {
 
   it('returns error shape on non-2xx without throwing', async () => {
     const http = createSyncHttp({
-      apiBase: 'https://api.test',
+      apiBase: 'https://api.test/api/v1',
       transport: makeFakeTransport(() => ({ status: 500, body: {} })),
     });
     const puller = createCardPuller({
@@ -81,7 +81,7 @@ describe('pullCardsSince', () => {
 
   it('handles 404 legacy backend gracefully', async () => {
     const http = createSyncHttp({
-      apiBase: 'https://api.test',
+      apiBase: 'https://api.test/api/v1',
       transport: makeFakeTransport(() => ({ status: 404, body: '' })),
     });
     const puller = createCardPuller({
@@ -97,7 +97,7 @@ describe('pullCardsSince', () => {
   it('omits since param when sinceIso is null', async () => {
     let capturedUrl = null;
     const http = createSyncHttp({
-      apiBase: 'https://api.test',
+      apiBase: 'https://api.test/api/v1',
       deviceId: 'dev-2',
       transport: makeFakeTransport((url) => {
         capturedUrl = url;

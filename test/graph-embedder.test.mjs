@@ -278,7 +278,7 @@ describe('F-038 T-030 generateSimilarityEdges', () => {
     await embedGraphNodes(daemon);
 
     // Then generate similarity edges
-    const result = generateSimilarityEdges(daemon);
+    const result = await generateSimilarityEdges(daemon);
     assert.ok(result.edgesCreated > 0, 'should create at least 1 similarity edge');
     assert.equal(result.nodesProcessed, 5);
   });
@@ -307,16 +307,16 @@ describe('F-038 T-030 generateSimilarityEdges', () => {
     }
   });
 
-  it('respects threshold parameter', () => {
+  it('respects threshold parameter', async () => {
     // With threshold = 0.99, very few edges should be created
-    const result = generateSimilarityEdges(daemon, { threshold: 0.99 });
+    const result = await generateSimilarityEdges(daemon, { threshold: 0.99 });
     // High threshold means fewer edges (or none)
     assert.ok(result.edgesCreated <= 1, `expected few edges at threshold 0.99, got ${result.edgesCreated}`);
   });
 
-  it('returns zeros when no embeddings exist', () => {
+  it('returns zeros when no embeddings exist', async () => {
     const emptyIndexer = new Indexer(path.join(tmpDir, 'empty-sim.db'));
-    const result = generateSimilarityEdges({ indexer: emptyIndexer });
+    const result = await generateSimilarityEdges({ indexer: emptyIndexer });
     assert.equal(result.edgesCreated, 0);
     assert.equal(result.nodesProcessed, 0);
     emptyIndexer.db.close();

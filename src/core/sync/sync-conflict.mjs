@@ -19,7 +19,7 @@ export function createConflictHandler({ http, memoryId, deviceId }) {
   if (!memoryId) throw new Error('createConflictHandler: memoryId is required');
 
   function base() {
-    return `/api/v1/memories/${encodeURIComponent(memoryId)}/sync-conflicts`;
+    return `/memories/${encodeURIComponent(memoryId)}/sync-conflicts`;
   }
 
   /**

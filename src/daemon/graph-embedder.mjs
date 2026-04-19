@@ -185,9 +185,14 @@ export async function embedGraphNodes(daemon, options = {}) {
  * @param {number} [options.maxEdgesPerNode] — max similar neighbors per node (default: MAX_EDGES_PER_NODE)
  * @returns {{ edgesCreated: number, nodesProcessed: number }}
  */
-export function generateSimilarityEdges(daemon, options = {}) {
+export async function generateSimilarityEdges(daemon, options = {}) {
   const threshold = options.threshold ?? SIMILARITY_THRESHOLD;
   const maxEdges = options.maxEdgesPerNode ?? MAX_EDGES_PER_NODE;
+  // Yield to the Node event loop every N outer-loop iterations so concurrent
+  // HTTP / MCP requests (e.g. Memory tab loads) do not stall while similarity
+  // edges compute on large graphs. See: bench 2026-04-19 — 10898 nodes
+  // previously blocked the event loop for ~152s.
+  const yieldEvery = options.yieldEvery ?? 50;
 
   const allEmbeddings = daemon.indexer.getAllGraphEmbeddings();
   const count = allEmbeddings.length;
@@ -209,6 +214,7 @@ export function generateSimilarityEdges(daemon, options = {}) {
   }
 
   let edgesCreated = 0;
+  let iSinceYield = 0;
   const processedPairs = new Set();
 
   for (const [type, embeddings] of byType) {
@@ -254,6 +260,12 @@ export function generateSimilarityEdges(daemon, options = {}) {
         });
 
         edgesCreated++;
+      }
+
+      iSinceYield++;
+      if (iSinceYield >= yieldEvery) {
+        iSinceYield = 0;
+        await new Promise((resolve) => setImmediate(resolve));
       }
     }
   }
@@ -301,6 +313,6 @@ function fastCosineSimilarity(a, b) {
  */
 export async function runGraphEmbeddingPipeline(daemon, options = {}) {
   const embedding = await embedGraphNodes(daemon, options);
-  const similarity = generateSimilarityEdges(daemon);
+  const similarity = await generateSimilarityEdges(daemon);
   return { embedding, similarity };
 }

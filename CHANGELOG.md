@@ -1,5 +1,55 @@
 # Changelog
 
+## [0.9.9] - 2026-04-19
+
+### Fixed — P1: cloud sync cards push silently 404'd on production
+- v2 sync modules (`sync-push-optimistic`, `sync-pull-cards`,
+  `sync-handshake`, `sync-conflict`) built endpoints starting with
+  `/api/v1/…`. Production config ships `api_base =
+  https://awareness.market/api/v1`, so the final URL double-prefixed
+  to `https://awareness.market/api/v1/api/v1/…` → HTTP 404. Every
+  user running sync on the default cloud endpoint saw recurring
+  `[CloudSync] Card push failed: HTTP 404` lines and no card would
+  ever sync to the cloud, even though memories / tasks / skills /
+  documents did.
+- Fix: strip the redundant `/api/v1` prefix from those four modules;
+  match the convention already used by `sync-push.mjs`
+  (`/memories/…` relative to `apiBase`). Test mocks updated to
+  use production-shaped apiBase (`https://api.test/api/v1`) so the
+  bug cannot re-enter.
+- Regression guard: `test/sync-url-no-double-prefix.test.mjs`
+  asserts each v2 URL contains exactly one `/api/v1/` segment.
+
+### Fixed — P1: `/api/v1/workspaces` returned 450KB of 2600+ entries
+- The handler returned the full `Record<path, entry>` map on every
+  request. Power users who had navigated many projects accumulated
+  multi-thousand-entry registries, ballooning the payload and
+  slowing the AwarenessClaw Memory tab's initial load.
+- Fix: accept `?limit=<N>` (capped at 500) and `?q=<substr>`. When
+  either is present the response shape becomes
+  `{ workspaces: [{ path, …entry }], total }`, sorted by
+  `lastUsed` desc. With no params the legacy map shape is preserved
+  (clients that hit the endpoint without params still work).
+- Tests: `test/api-workspaces-pagination.test.mjs` — 4/4.
+
+## [0.9.8] - 2026-04-19
+
+### Fixed — P0: graph-embedder blocking Memory tab for 2+ minutes
+- `generateSimilarityEdges` was fully synchronous. On workspaces with
+  ~10K graph nodes (e.g. Awareness repo), the O(n²) comparison blocked
+  the Node event loop for ~152 s. All concurrent HTTP / MCP requests
+  (Memory tab knowledge loads, workspace switches, health checks)
+  queued behind it, presenting as "the app is frozen".
+- Fix: `generateSimilarityEdges` is now `async` and yields with
+  `await setImmediate()` every `yieldEvery=50` outer-loop iterations.
+  Total compute stays ≈ the same (~132 s for 10.9K nodes) but MCP
+  calls issued during compute now return in ~1–4 s instead of 144 s,
+  making the Memory tab responsive throughout. Callers that `await`
+  `runGraphEmbeddingPipeline` already propagate correctly; one
+  in-module caller updated to `await generateSimilarityEdges`.
+- Tests: 17/17 `test/graph-embedder.test.mjs` green. Four test call
+  sites updated from sync to `await`.
+
 ## [0.9.7] - 2026-04-19
 
 ### Fixed — CRITICAL: fresh npm install crash

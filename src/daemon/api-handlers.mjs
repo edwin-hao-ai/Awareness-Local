@@ -56,7 +56,7 @@ export async function handleApiRoute(daemon, req, res, url) {
   }
 
   if (route === '/workspaces' && req.method === 'GET') {
-    return apiWorkspaces(res);
+    return apiWorkspaces(res, url);
   }
 
   if (route === '/config' && req.method === 'GET') {
@@ -463,12 +463,51 @@ export function apiSyncStatus(daemon, _req, res) {
   });
 }
 
-export async function apiWorkspaces(res) {
+/**
+ * Workspace registry endpoint.
+ *
+ * Default response is the full `Record<path, entry>` map — kept for back-compat
+ * with clients written before pagination existed.
+ *
+ * Query params (all optional):
+ *   - `limit=<N>`    — return at most N entries, sorted by lastUsed desc.
+ *                      When present, the response shape flips to
+ *                      `{ workspaces: [{ path, ...entry }], total }` which
+ *                      is much smaller for users with thousands of registered
+ *                      workspaces (e.g. AwarenessClaw Memory tab previously
+ *                      pulled a 450KB 2600-entry blob on every load).
+ *   - `q=<substr>`   — case-insensitive path substring filter. Applied before
+ *                      limit.
+ */
+export async function apiWorkspaces(res, url) {
   try {
     const { loadWorkspaces } = await import('../core/config.mjs');
-    const ws = loadWorkspaces();
+    const ws = loadWorkspaces() || {};
+
+    const limitRaw = url?.searchParams?.get('limit');
+    const q = (url?.searchParams?.get('q') || '').trim().toLowerCase();
+    const limit = limitRaw != null ? Math.max(0, Math.min(500, Number(limitRaw) || 0)) : null;
+
+    // Back-compat: no limit + no query → return the raw map.
+    if (limit === null && !q) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(ws));
+    }
+
+    const entries = Object.entries(ws);
+    const filtered = q
+      ? entries.filter(([p]) => p.toLowerCase().includes(q))
+      : entries;
+    filtered.sort(([, a], [, b]) => {
+      const ta = Date.parse(a?.lastUsed || '') || 0;
+      const tb = Date.parse(b?.lastUsed || '') || 0;
+      return tb - ta;
+    });
+    const page = limit !== null ? filtered.slice(0, limit) : filtered;
+    const workspaces = page.map(([p, entry]) => ({ path: p, ...entry }));
+
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify(ws));
+    return res.end(JSON.stringify({ workspaces, total: filtered.length }));
   } catch {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     return res.end('{}');

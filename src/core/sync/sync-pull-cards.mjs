@@ -46,7 +46,7 @@ export function createCardPuller({ http, memoryId, deviceId, applyCard }) {
     if (deviceId) params.set('device_id', deviceId);
     params.set('limit', String(limit));
 
-    const endpoint = `/api/v1/memories/${encodeURIComponent(memoryId)}/cards/sync?${params.toString()}`;
+    const endpoint = `/memories/${encodeURIComponent(memoryId)}/cards/sync?${params.toString()}`;
     const res = await http.get(endpoint);
 
     if (res.status === 404) {

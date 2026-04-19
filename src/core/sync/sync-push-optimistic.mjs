@@ -62,7 +62,7 @@ export function createOptimisticPusher({ http, memoryId, deviceId }) {
 
     const headers = { 'If-Match': String(version) };
     const res = await http.post(
-      `/api/v1/memories/${encodeURIComponent(memoryId)}/cards/sync`,
+      `/memories/${encodeURIComponent(memoryId)}/cards/sync`,
       body,
       { headers },
     );

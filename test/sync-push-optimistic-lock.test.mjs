@@ -19,7 +19,7 @@ describe('pushCardWithVersion', () => {
   it('sends If-Match header with local version and returns updated status on 200', async () => {
     let captured = null;
     const http = createSyncHttp({
-      apiBase: 'https://api.test',
+      apiBase: 'https://api.test/api/v1',
       apiKey: 'k',
       deviceId: 'dev-1',
       transport: makeFakeTransport((url, opts) => {
@@ -57,7 +57,7 @@ describe('pushCardWithVersion', () => {
   it('defaults version to 1 when card.version is missing', async () => {
     let capturedHeaders = null;
     const http = createSyncHttp({
-      apiBase: 'https://api.test',
+      apiBase: 'https://api.test/api/v1',
       transport: makeFakeTransport((_url, opts) => {
         capturedHeaders = opts.headers;
         return { status: 200, body: { status: 'created', card_id: 'new', version: 1 } };
@@ -71,7 +71,7 @@ describe('pushCardWithVersion', () => {
 
   it('returns status=conflict on 409 with cloud/local versions', async () => {
     const http = createSyncHttp({
-      apiBase: 'https://api.test',
+      apiBase: 'https://api.test/api/v1',
       transport: makeFakeTransport(() => ({
         status: 409,
         body: {
@@ -100,7 +100,7 @@ describe('pushCardWithVersion', () => {
 
   it('returns error on other non-2xx without throwing', async () => {
     const http = createSyncHttp({
-      apiBase: 'https://api.test',
+      apiBase: 'https://api.test/api/v1',
       transport: makeFakeTransport(() => ({ status: 500, body: { detail: 'boom' } })),
     });
     const pusher = createOptimisticPusher({ http, memoryId: 'mem-1' });
