@@ -71,10 +71,11 @@ function prepareEmbedText(node) {
  * @param {object} daemon — daemon instance with _embedder and indexer
  * @param {object} [options]
  * @param {function} [options.onProgress] — called with (done, total)
+ * @param {AbortSignal} [options.signal] — cancellation signal (switchProject aborts here)
  * @returns {Promise<{ embedded: number, skipped: number, total: number }>}
  */
 export async function embedGraphNodes(daemon, options = {}) {
-  const { onProgress } = options;
+  const { onProgress, signal } = options;
 
   if (!daemon._embedder) {
     console.warn('[graph-embedder] Embedder not available — skipping graph embedding');
@@ -93,7 +94,11 @@ export async function embedGraphNodes(daemon, options = {}) {
     return { embedded: 0, skipped: 0, total: 0 };
   }
 
-  const unembedded = daemon.indexer.getUnembeddedGraphNodes();
+  // Snapshot the indexer reference so we don't swap to a new workspace's DB
+  // mid-pipeline if switchProject() runs while we're embedding.
+  const indexer = daemon.indexer;
+  if (!indexer) return { embedded: 0, skipped: 0, total: 0 };
+  const unembedded = indexer.getUnembeddedGraphNodes();
   const total = unembedded.length;
 
   if (total === 0) {
@@ -109,6 +114,10 @@ export async function embedGraphNodes(daemon, options = {}) {
 
   // Process in batches
   for (let i = 0; i < total; i += BATCH_SIZE) {
+    if (signal?.aborted) {
+      console.log(`[graph-embedder] embed aborted at ${embedded}/${total}`);
+      return { embedded, skipped, total, aborted: true };
+    }
     const batch = unembedded.slice(i, i + BATCH_SIZE);
     const texts = batch.map(prepareEmbedText);
 
@@ -147,7 +156,7 @@ export async function embedGraphNodes(daemon, options = {}) {
         const node = batch[validIndices[k]];
         const vector = vectors[k];
         if (vector) {
-          const outcome = daemon.indexer.storeGraphEmbedding(node.id, vector, modelId);
+          const outcome = indexer.storeGraphEmbedding(node.id, vector, modelId);
           if (outcome && outcome.inserted) embedded++;
           else skipped++;
         } else {
@@ -197,8 +206,14 @@ export async function generateSimilarityEdges(daemon, options = {}) {
   // edges compute on large graphs. See: bench 2026-04-19 — 10898 nodes
   // previously blocked the event loop for ~152s.
   const yieldEvery = options.yieldEvery ?? 50;
+  const signal = options.signal;
 
-  const allEmbeddings = daemon.indexer.getAllGraphEmbeddings();
+  // Snapshot indexer — mirrors embedGraphNodes. Without this we'd write
+  // B's similarity edges into C's DB after a switch, because daemon.indexer
+  // is a getter that points at whatever workspace is current.
+  const indexer = daemon.indexer;
+  if (!indexer) return { edgesCreated: 0, nodesProcessed: 0 };
+  const allEmbeddings = indexer.getAllGraphEmbeddings();
   const count = allEmbeddings.length;
 
   if (count === 0) {
@@ -255,7 +270,7 @@ export async function generateSimilarityEdges(daemon, options = {}) {
         processedPairs.add(c.pairKey);
 
         // Create bidirectional similarity edge
-        daemon.indexer.graphInsertEdge({
+        indexer.graphInsertEdge({
           from_node_id: a.node_id,
           to_node_id: c.node_id,
           edge_type: 'similarity',
@@ -270,6 +285,10 @@ export async function generateSimilarityEdges(daemon, options = {}) {
       if (iSinceYield >= yieldEvery) {
         iSinceYield = 0;
         await new Promise((resolve) => setImmediate(resolve));
+        if (signal?.aborted) {
+          console.log(`[graph-embedder] similarity aborted at ${edgesCreated} edges`);
+          return { edgesCreated, nodesProcessed: count, aborted: true };
+        }
       }
     }
   }
@@ -317,6 +336,9 @@ function fastCosineSimilarity(a, b) {
  */
 export async function runGraphEmbeddingPipeline(daemon, options = {}) {
   const embedding = await embedGraphNodes(daemon, options);
-  const similarity = await generateSimilarityEdges(daemon);
+  if (embedding.aborted || options.signal?.aborted) {
+    return { embedding, similarity: { edgesCreated: 0, nodesProcessed: 0, aborted: true } };
+  }
+  const similarity = await generateSimilarityEdges(daemon, { signal: options.signal });
   return { embedding, similarity };
 }

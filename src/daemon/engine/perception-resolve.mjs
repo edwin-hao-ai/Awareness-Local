@@ -17,6 +17,11 @@ export async function checkPerceptionResolution(daemon, newMemoryId, newMemory) 
   const config = daemon._loadConfig();
   if (!config.cloud?.enabled || !config.cloud?.api_key) return;
 
+  // Snapshot the workspace so a slow cloud LLM call can't end up
+  // auto-resolving a signal in the NEW workspace after a switch.
+  const projectAtStart = daemon.projectDir;
+  const indexerAtStart = daemon.indexer;
+
   // Fetch active perceptions that support auto-resolution
   if (!daemon.indexer?.listPerceptionStates) return;
   const activeStates = daemon.indexer.listPerceptionStates({
@@ -92,14 +97,20 @@ ${filtered.map((s) => `[${s.signal_id}] (${s.signal_type}) ${s.title || s.signal
       : resp?.content || resp?.choices?.[0]?.message?.content || '';
     if (!raw) return;
 
+    // The LLM round-trip can take several seconds. If the workspace was
+    // switched during that window, abandon the write — it would otherwise
+    // resolve a signal that belongs to a different workspace.
+    if (daemon.projectDir !== projectAtStart) return;
+
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (!jsonMatch) return;
     const parsed = JSON.parse(jsonMatch[0]);
     const results = Array.isArray(parsed.results) ? parsed.results : [];
 
     for (const r of results) {
+      if (daemon.projectDir !== projectAtStart) return;
       if (r.status === 'resolved' && r.signal_id) {
-        daemon.indexer.autoResolvePerception(r.signal_id, newMemoryId, r.reason || 'Auto-resolved by LLM');
+        indexerAtStart.autoResolvePerception(r.signal_id, newMemoryId, r.reason || 'Auto-resolved by LLM');
         console.log(`[awareness-local] perception auto-resolved: ${r.signal_id} — ${(r.reason || '').slice(0, 80)}`);
       }
     }

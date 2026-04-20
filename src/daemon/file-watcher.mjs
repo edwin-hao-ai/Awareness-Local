@@ -51,11 +51,17 @@ const GIT_HEAD_DEBOUNCE_MS = 1000;
 export function startWorkspaceWatcher(daemon) {
   if (!daemon.projectDir || !daemon.scanConfig?.watch_enabled) return null;
 
+  // Snapshot at watcher-start so the debounce fire-point can reject stale
+  // callbacks after switchProject has moved on — otherwise a 2s debounce
+  // set on workspace A can still trigger a scan after daemon already
+  // switched to workspace B.
+  const projectAtStart = daemon.projectDir;
   let debounceTimer = null;
 
   try {
     const watcher = fs.watch(daemon.projectDir, { recursive: true }, (_event, filename) => {
       if (!filename) return;
+      if (daemon.projectDir !== projectAtStart) return; // watcher outlived its workspace
 
       // Skip changes inside excluded directories
       const parts = filename.split(path.sep);
@@ -69,6 +75,7 @@ export function startWorkspaceWatcher(daemon) {
       // Debounce
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
+        if (daemon.projectDir !== projectAtStart) return;
         if (typeof daemon.triggerScan === 'function') {
           daemon.triggerScan('incremental').catch(err => {
             console.error('[workspace-watcher] scan error:', err.message);
@@ -77,6 +84,13 @@ export function startWorkspaceWatcher(daemon) {
       }, WORKSPACE_DEBOUNCE_MS);
     });
 
+    // Expose debounce cleanup so switchProject's watcher.close() tear-down
+    // can cancel the pending setTimeout in addition to closing the handle.
+    const origClose = watcher.close.bind(watcher);
+    watcher.close = () => {
+      if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
+      return origClose();
+    };
     return watcher;
   } catch (err) {
     console.error('[workspace-watcher] setup failed:', err.message);
@@ -97,12 +111,15 @@ export function startGitHeadWatcher(daemon) {
   const gitHeadPath = path.join(daemon.projectDir, '.git', 'HEAD');
   if (!fs.existsSync(gitHeadPath)) return null;
 
+  const projectAtStart = daemon.projectDir;
   let debounceTimer = null;
 
   try {
     const watcher = fs.watch(gitHeadPath, () => {
+      if (daemon.projectDir !== projectAtStart) return;
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
+        if (daemon.projectDir !== projectAtStart) return;
         console.log('[git-watcher] .git/HEAD changed — triggering incremental scan');
         if (typeof daemon.triggerScan === 'function') {
           daemon.triggerScan('incremental').catch(err => {
@@ -112,6 +129,11 @@ export function startGitHeadWatcher(daemon) {
       }, GIT_HEAD_DEBOUNCE_MS);
     });
 
+    const origClose = watcher.close.bind(watcher);
+    watcher.close = () => {
+      if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
+      return origClose();
+    };
     return watcher;
   } catch (err) {
     console.error('[git-watcher] setup failed:', err.message);

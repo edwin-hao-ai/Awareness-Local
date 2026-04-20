@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.9.11] - 2026-04-20
+
+### Fixed — workspace switch hang / log flood after 2+ consecutive switches
+Users reported AwarenessClaw freezing after switching workspaces more than
+twice in a row. Root cause was a family of fire-and-forget background
+pipelines that kept writing to an indexer **after** `switchProject()` had
+closed its SQLite DB, producing thousands of
+`The database connection is not open` errors per switch cycle (7606 lines
+observed in the 3-workspace × 3000-file repro) and occasional UI stalls
+because `scanState` was being clobbered by stale pipelines.
+
+Fixes in three layers:
+- **graph-embedder**: `embedGraphNodes` and `generateSimilarityEdges` now
+  accept an `AbortSignal` and check it between batches / yield points.
+  Both functions snapshot `daemon.indexer` at pipeline start so they
+  cannot swap onto a new workspace's DB mid-run. `triggerGraphEmbedding`
+  exposes its promise as `daemon._inflightGraphPipeline`.
+- **switchProject**: after aborting the scan controller, now awaits
+  `_inflightGraphPipeline` (up to 3 s) before `indexer.close()`, so the
+  pipeline exits cleanly instead of writing into the closed DB.
+- **defence in depth**: every `graphInsert*`, `storeEmbedding`,
+  `storeCardEmbedding`, `storeGraphEmbedding`, `refineMocWithLlm`,
+  `autoResolvePerception` and the maintenance timers (`runSkillDecay`,
+  graph-maintenance) short-circuit when `this.db.open === false`.
+  Workspace-scanner's link-discovery and wiki-generation passes check
+  `indexer.db?.open` before preparing statements.
+
+### Fixed — file-watcher debounce fires into a stale workspace
+`startWorkspaceWatcher` / `startGitHeadWatcher` leaked their debounce
+`setTimeout` through `watcher.close()`, so a 2 s debounced
+`triggerScan('incremental')` could fire against the NEW workspace
+after `switchProject()` moved on. Both watchers now capture
+`projectAtStart`, reject callbacks on mismatch, and wrap
+`watcher.close` to clear the pending debounce timer.
+
+### Fixed — cloud LLM refinement writes into the wrong workspace
+`_refineMocTitles` and `_checkPerceptionResolution` call the cloud
+`/chat` endpoint (not the client IDE's LLM). A slow round-trip could
+land the UPDATE on a MOC card or auto-resolve a perception signal in
+the workspace the user just switched away from. Both paths now
+snapshot `projectDir` + `indexer` before dispatching and re-check
+after `await`.
+
+### Verified
+- New regression test `test/switch-ghost-pipeline.test.mjs` — 3
+  back-to-back switches produce **zero** closed-DB log lines.
+- Stress test (not in CI): 7500 files × 7 workspaces × 3 cycles = 21
+  consecutive switches → 0 closed-DB errors, switch p95 = 399 ms,
+  healthz max = 196 ms, zero failures.
+- Existing `f055-cross-workspace-isolation` (3) +
+  `cli-single-daemon` (4) + `cloud-sync-shutdown-race` (18) all green.
+
 ## [0.9.10] - 2026-04-19
 
 ### Fixed — Wiki tag topic renders blank after "building index" spinner

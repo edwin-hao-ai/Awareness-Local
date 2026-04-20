@@ -912,6 +912,23 @@ export class AwarenessLocalDaemon {
         this._scanAbortController = null;
       }
 
+      // 1.5 Drain any in-flight graph-embedder pipeline rooted at the OLD
+      // projectDir before closing its indexer. Without this the pipeline
+      // keeps calling graphInsertEdge / storeGraphEmbedding on a closed DB
+      // and floods the log with "database connection is not open" errors.
+      // Capped at 3s so a runaway pipeline can't block the switch forever —
+      // the indexer's db.open guard is our safety net if it outlives the wait.
+      if (this._inflightGraphPipeline) {
+        const inflight = this._inflightGraphPipeline;
+        try {
+          await Promise.race([
+            inflight.catch(() => {}),
+            new Promise((resolve) => setTimeout(resolve, 3000)),
+          ]);
+        } catch { /* swallowed */ }
+        this._inflightGraphPipeline = null;
+      }
+
       // 2. Close old indexer
       if (this.indexer && this.indexer.close) {
         this.indexer.close();
@@ -1071,6 +1088,13 @@ export class AwarenessLocalDaemon {
     const memoryId = config.cloud.memory_id;
     const apiKey = config.cloud.api_key;
 
+    // Snapshot the project so a slow cloud LLM round-trip doesn't end up
+    // writing a refined title into the WRONG workspace's MOC after the
+    // user has switched. Each iteration re-checks before await and before
+    // the DB write.
+    const projectAtStart = this.projectDir;
+    const indexerAtStart = this.indexer;
+
     // Simple LLM inference via cloud API's chat endpoint
     const llmInfer = async (systemPrompt, userContent) => {
       const { httpJson } = await import('./daemon/cloud-http.mjs');
@@ -1087,8 +1111,9 @@ export class AwarenessLocalDaemon {
     };
 
     for (const mocId of mocIds) {
+      if (this.projectDir !== projectAtStart) return; // workspace switched mid-loop
       try {
-        await this.indexer.refineMocWithLlm(mocId, llmInfer);
+        await indexerAtStart.refineMocWithLlm(mocId, llmInfer);
       } catch (err) {
         // Non-fatal — tag-based title remains
         if (process.env.DEBUG) {

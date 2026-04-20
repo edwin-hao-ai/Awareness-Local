@@ -253,6 +253,11 @@ export async function triggerScan(daemon, mode = 'incremental') {
 
 /**
  * Kick off the background graph-embedding pipeline.
+ *
+ * Stores the in-flight promise on `daemon._inflightGraphPipeline` so that
+ * switchProject() can await it before tearing down the indexer — previously
+ * a stale pipeline would keep calling graphInsertEdge on a closed DB,
+ * flooding the log with "The database connection is not open" errors.
  */
 export function triggerGraphEmbedding(daemon) {
   daemon.scanState = updateScanState(daemon.scanState, {
@@ -262,8 +267,15 @@ export function triggerGraphEmbedding(daemon) {
     embed_done: 0,
   });
 
-  runGraphEmbeddingPipeline(daemon, {
+  // Snapshot the project directory so the .then() handler doesn't write
+  // scan-state into the NEW workspace's scan-state.json after a switch.
+  const projectAtStart = daemon.projectDir;
+  const signal = daemon._scanAbortController?.signal;
+
+  const pipelinePromise = runGraphEmbeddingPipeline(daemon, {
+    signal,
     onProgress: (done, total) => {
+      if (daemon.projectDir !== projectAtStart) return;
       daemon.scanState = updateScanState(daemon.scanState, {
         embed_total: total,
         embed_done: done,
@@ -271,6 +283,7 @@ export function triggerGraphEmbedding(daemon) {
     },
   })
     .then(({ embedding, similarity }) => {
+      if (daemon.projectDir !== projectAtStart) return { embedding, similarity };
       daemon.scanState = updateScanState(daemon.scanState, {
         status: 'idle',
         phase: null,
@@ -278,13 +291,24 @@ export function triggerGraphEmbedding(daemon) {
         embed_done: embedding.embedded,
       });
       saveScanState(daemon.projectDir, daemon.scanState);
+      return { embedding, similarity };
     })
     .catch((err) => {
       console.warn('[graph-embedder] pipeline error:', err.message);
-      daemon.scanState = updateScanState(daemon.scanState, {
-        status: 'idle',
-        phase: null,
-      });
-      saveScanState(daemon.projectDir, daemon.scanState);
+      if (daemon.projectDir === projectAtStart) {
+        daemon.scanState = updateScanState(daemon.scanState, {
+          status: 'idle',
+          phase: null,
+        });
+        saveScanState(daemon.projectDir, daemon.scanState);
+      }
+    })
+    .finally(() => {
+      if (daemon._inflightGraphPipeline === pipelinePromise) {
+        daemon._inflightGraphPipeline = null;
+      }
     });
+
+  daemon._inflightGraphPipeline = pipelinePromise;
+  return pipelinePromise;
 }

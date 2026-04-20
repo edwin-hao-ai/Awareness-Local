@@ -515,7 +515,7 @@ export async function indexWorkspaceFiles(files, indexer, options = {}) {
   }
 
   // Third pass: doc→code link discovery for markdown/doc files
-  if (!options.signal?.aborted) {
+  if (!options.signal?.aborted && indexer.db?.open) {
     try {
       const allNodes = indexer.db
         .prepare("SELECT id, node_type, title FROM graph_nodes WHERE status = 'active'")
@@ -548,7 +548,7 @@ export async function indexWorkspaceFiles(files, indexer, options = {}) {
   }
 
   // Fourth pass: generate wiki pages and write to graph_nodes
-  if (!options.signal?.aborted) {
+  if (!options.signal?.aborted && indexer.db?.open) {
     try {
       const allNodes = indexer.db
         .prepare("SELECT id, node_type, title, content, metadata FROM graph_nodes WHERE status = 'active'")

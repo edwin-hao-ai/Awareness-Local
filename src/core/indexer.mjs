@@ -1090,6 +1090,7 @@ export class Indexer {
    * @param {Function} llmInfer — async (systemPrompt, userContent) => string
    */
   async refineMocWithLlm(mocId, llmInfer) {
+    if (!this.db || !this.db.open) return;
     const moc = this.db.prepare('SELECT * FROM knowledge_cards WHERE id = ?').get(mocId);
     if (!moc) return;
 
@@ -1122,6 +1123,9 @@ Return ONLY JSON: {"title": "...", "summary": "..."}`;
 
     try {
       const raw = await llmInfer(systemPrompt, userContent);
+      // The LLM call can take seconds — re-check the DB is still open so we
+      // don't write a refined title into a freshly closed or swapped indexer.
+      if (!this.db || !this.db.open) return;
       // Parse JSON response
       const match = raw.match(/\{[\s\S]*?"title"[\s\S]*?\}/);
       if (!match) return;
@@ -1403,6 +1407,9 @@ Return ONLY JSON: {"title": "...", "summary": "..."}`;
    * @returns {{ inserted: boolean }}
    */
   graphInsertNode(node) {
+    if (!this.db || !this.db.open) {
+      return { inserted: false, skipped: 'db_closed' };
+    }
     const now = new Date().toISOString();
     const metadata = node.metadata ? JSON.stringify(node.metadata) : null;
 
@@ -1455,6 +1462,14 @@ Return ONLY JSON: {"title": "...", "summary": "..."}`;
    * @returns {{ inserted: boolean }}
    */
   graphInsertEdge(edge) {
+    // Silently skip when the DB is already closed — happens when a prior
+    // workspace's graph-embedder pipeline is still running after
+    // switchProject() has torn down the old indexer. Returning a plain
+    // skipped result keeps the log clean and is safe because the pipeline
+    // exits naturally on the next abort check.
+    if (!this.db || !this.db.open) {
+      return { inserted: false, skipped: 'db_closed' };
+    }
     const now = new Date().toISOString();
     const metadata = edge.metadata ? JSON.stringify(edge.metadata) : null;
 
@@ -1869,6 +1884,11 @@ Return ONLY JSON: {"title": "...", "summary": "..."}`;
    * @param {string} modelId — e.g. 'all-MiniLM-L6-v2' or 'multilingual-e5-small'.
    */
   storeEmbedding(memoryId, vector, modelId) {
+    // Skip silently when the DB is closed — happens when a fire-and-forget
+    // embedAndStore() call lands after switchProject() torn down the old
+    // indexer. The prepared statement is bound to the closed DB and would
+    // otherwise throw "database connection is not open".
+    if (!this.db || !this.db.open) return;
     const buf = Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
     this._stmtUpsertEmbedding.run({
       memory_id: memoryId,
@@ -1884,6 +1904,7 @@ Return ONLY JSON: {"title": "...", "summary": "..."}`;
    * shadow memory row.
    */
   storeCardEmbedding(cardId, vector, modelId) {
+    if (!this.db || !this.db.open) return;
     const buf = Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
     try {
       this.db
@@ -1964,6 +1985,9 @@ Return ONLY JSON: {"title": "...", "summary": "..."}`;
    * @param {string} modelId — e.g. 'all-MiniLM-L6-v2'.
    */
   storeGraphEmbedding(nodeId, vector, modelId) {
+    if (!this.db || !this.db.open) {
+      return { inserted: false, skipped: 'db_closed' };
+    }
     const buf = Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
     try {
       this._stmtUpsertGraphEmbedding.run({
@@ -2131,6 +2155,7 @@ Return ONLY JSON: {"title": "...", "summary": "..."}`;
    * Mark signal as auto-resolved by LLM.
    */
   autoResolvePerception(signalId, memoryId, reason) {
+    if (!this.db || !this.db.open) return;
     const now = nowISO();
     // Ensure row exists
     const existing = this.getPerceptionState(signalId);

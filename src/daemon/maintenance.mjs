@@ -27,7 +27,9 @@ export function startGraphMaintenanceTimer(daemon) {
   const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
   const MAX_EDGES_PER_NODE = 50;
   const run = () => {
-    if (!daemon.indexer || !daemon.indexer.db) return;
+    // Guard against firing mid-switch: daemon.indexer could point at a DB
+    // that's just been closed by switchProject. db.open=false means noop.
+    if (!daemon.indexer || !daemon.indexer.db || !daemon.indexer.db.open) return;
     try {
       const pruned = daemon.indexer.pruneGraphEdges({
         maxPerNode: MAX_EDGES_PER_NODE,
@@ -61,7 +63,7 @@ export function startGraphMaintenanceTimer(daemon) {
  * Pinned skills always keep decay_score = 1.0.
  */
 export function runSkillDecay(daemon) {
-  if (!daemon.indexer || !daemon.indexer.db) return;
+  if (!daemon.indexer || !daemon.indexer.db || !daemon.indexer.db.open) return;
   try {
     const now = Date.now();
     const skills = daemon.indexer.db
