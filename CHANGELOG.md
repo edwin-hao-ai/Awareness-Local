@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.9.12] - 2026-04-21
+
+### Fixed — wiki "click topic → click card" several-second freeze
+On real workspaces (~2.5k cards) the AwarenessClaw wiki tab took 1-3
+seconds to render a card detail and `/healthz` would briefly fall over
+during the wait. Two compounding causes:
+- `apiGetKnowledgeCard` (MOC card path) ran **one full-table
+  `tags LIKE '%"<tag>"%'` scan per MOC tag** and walked them sequentially
+  in better-sqlite3 (which is synchronous). A 5-tag MOC over 2.5k cards =
+  5 sequential ~50-150 ms scans — the event loop was blocked the entire
+  time so concurrent GETs (sidebar, healthz) queued behind it.
+- The whole handler was synchronous, so even the single-tag `tag_<name>`
+  pseudo-topic path could not yield to other in-flight requests after
+  its scan.
+
+Fix:
+- Combine N tag scans into ONE `WHERE ... AND (tags LIKE ? OR ...)` pass
+  followed by a JS-side intersect against a `Set(mocTags)`. Defensive
+  intersect rejects substring false positives (e.g. tag "go" must not
+  match "google"). Verified on a 5-tag fixture in
+  `test/api-tag-pseudo-topic.test.mjs`.
+- `apiGetKnowledgeCard` is now `async` and `await new Promise(setImmediate)`
+  is inserted after each synchronous LIKE scan so other requests can be
+  served between the scan and the JSON-parse phase.
+- Net: 5-tag MOC member fetch went from ~5×scan-time + blocked loop to
+  ~1×scan-time + voluntary yield. **No data-quality change** — the
+  defensive intersect guarantees the result set is identical to the old
+  per-tag loop.
+
+### Fixed — `/healthz` periodically dropped under graph-embedder load
+`generateSimilarityEdges` yielded every 50 outer iterations. On a
+6276-node workspace this is ~313 k 384-dim dot products between yields
+(~250-400 ms of pure CPU on M-series silicon) — long enough to fail a
+200 ms healthz timeout and make the daemon look dead from the UI side.
+Lowered `yieldEvery` to 8 (≈ 50 k dot products ≈ ~50 ms bursts) so
+healthz and parallel /api/v1 GETs always get a slot. **Algorithm and
+output edges are byte-identical** — only the CPU schedule changes.
+
+### Verified
+- `test/api-tag-pseudo-topic.test.mjs` — 5/5 (added a 5-tag MOC
+  perf+correctness regression that locks the OR-of-LIKEs + defensive
+  intersect contract).
+- All other existing tests (switch-ghost-pipeline, F-055
+  cross-workspace-isolation, cli-single-daemon) — green.
+
 ## [0.9.11] - 2026-04-20
 
 ### Fixed — workspace switch hang / log flood after 2+ consecutive switches

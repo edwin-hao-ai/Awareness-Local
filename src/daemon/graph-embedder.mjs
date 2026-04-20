@@ -205,7 +205,13 @@ export async function generateSimilarityEdges(daemon, options = {}) {
   // HTTP / MCP requests (e.g. Memory tab loads) do not stall while similarity
   // edges compute on large graphs. See: bench 2026-04-19 — 10898 nodes
   // previously blocked the event loop for ~152s.
-  const yieldEvery = options.yieldEvery ?? 50;
+  // 0.9.12 · tightened from 50→8 after user reported `/healthz` going dead
+  // mid-pipeline on a 6276-node workspace. Each outer iteration runs an
+  // O(N) inner loop of fastCosineSimilarity (384-dim dot product); 50
+  // outer × 6276 inner = ~300k vector dot products between yields, which
+  // is ~250-400 ms of pure CPU on M-series silicon — long enough to fail
+  // a 200 ms healthz timeout. 8 keeps the burst ≤ ~50 ms.
+  const yieldEvery = options.yieldEvery ?? 8;
   const signal = options.signal;
 
   // Snapshot indexer — mirrors embedGraphNodes. Without this we'd write

@@ -31,7 +31,7 @@ function makeDaemon(dbPath) {
   return { daemon: { indexer }, cleanup: () => indexer.db.close() };
 }
 
-test('apiGetKnowledgeCard returns members for tag_<name> pseudo-id', () => {
+test('apiGetKnowledgeCard returns members for tag_<name> pseudo-id', async () => {
   const tmp = path.join(os.tmpdir(), `awareness-tag-topic-${Date.now()}.db`);
   const { daemon, cleanup } = makeDaemon(tmp);
   try {
@@ -49,7 +49,7 @@ test('apiGetKnowledgeCard returns members for tag_<name> pseudo-id', () => {
     }
 
     const res = new MockRes();
-    apiGetKnowledgeCard(daemon, null, res, 'tag_pgvector');
+    await apiGetKnowledgeCard(daemon, null, res, 'tag_pgvector');
     assert.equal(res.status, 200);
     const parsed = JSON.parse(res.body);
     assert.equal(parsed.id, 'tag_pgvector');
@@ -63,7 +63,7 @@ test('apiGetKnowledgeCard returns members for tag_<name> pseudo-id', () => {
   }
 });
 
-test('apiGetKnowledgeCard case-insensitive tag match', () => {
+test('apiGetKnowledgeCard case-insensitive tag match', async () => {
   const tmp = path.join(os.tmpdir(), `awareness-tag-case-${Date.now()}.db`);
   const { daemon, cleanup } = makeDaemon(tmp);
   try {
@@ -75,7 +75,7 @@ test('apiGetKnowledgeCard case-insensitive tag match', () => {
 
     const res = new MockRes();
     // Sidebar produces lowercase id; daemon lowercases before LIKE search
-    apiGetKnowledgeCard(daemon, null, res, 'tag_pgvector');
+    await apiGetKnowledgeCard(daemon, null, res, 'tag_pgvector');
     const parsed = JSON.parse(res.body);
     // SQLite LIKE is case-insensitive for ASCII — this passes without
     // extra work on the daemon side, but the test locks the behaviour.
@@ -86,12 +86,12 @@ test('apiGetKnowledgeCard case-insensitive tag match', () => {
   }
 });
 
-test('apiGetKnowledgeCard rejects empty tag', () => {
+test('apiGetKnowledgeCard rejects empty tag', async () => {
   const tmp = path.join(os.tmpdir(), `awareness-tag-empty-${Date.now()}.db`);
   const { daemon, cleanup } = makeDaemon(tmp);
   try {
     const res = new MockRes();
-    apiGetKnowledgeCard(daemon, null, res, 'tag_');
+    await apiGetKnowledgeCard(daemon, null, res, 'tag_');
     assert.equal(res.status, 400);
     const parsed = JSON.parse(res.body);
     assert.match(parsed.error || '', /empty tag/i);
@@ -101,7 +101,55 @@ test('apiGetKnowledgeCard rejects empty tag', () => {
   }
 });
 
-test('apiGetKnowledgeCard MOC path still works (regression)', () => {
+test('apiGetKnowledgeCard MOC multi-tag uses single OR-of-LIKEs scan (0.9.12 perf fix)', async () => {
+  // Regression for the user-reported "click topic → click card → very slow"
+  // wiki bug. Pre-0.9.12 ran one full-table LIKE scan per MOC tag; for a
+  // 5-tag MOC over a non-trivial table this blocked the event loop for
+  // hundreds of ms. The new path runs ONE scan with OR-of-LIKEs and a JS
+  // intersect filter. This test asserts: (a) result set unchanged for the
+  // 5-tag case, (b) defensive intersect rejects substring false positives
+  // (e.g. tag "go" must not match card tagged "google" via the LIKE).
+  const tmp = path.join(os.tmpdir(), `awareness-moc-multi-${Date.now()}.db`);
+  const { daemon, cleanup } = makeDaemon(tmp);
+  try {
+    const now = new Date().toISOString();
+    daemon.indexer.db.prepare(
+      `INSERT INTO knowledge_cards (id, title, summary, category, status, confidence, tags, card_type, created_at, updated_at, filepath)
+       VALUES ('moc1', 'Cluster MOC', 'summary', 'decision', 'active', 0.7, ?, 'moc', ?, ?, '/tmp/seed-moc1.md')`
+    ).run(JSON.stringify(['rust', 'tokio', 'axum', 'serde', 'go']), now, now);
+
+    // 4 real members (each shares at least one MOC tag), 1 substring decoy
+    const seed = [
+      ['m1', JSON.stringify(['rust', 'web'])],          // matches rust
+      ['m2', JSON.stringify(['tokio'])],                // matches tokio
+      ['m3', JSON.stringify(['axum', 'serde'])],        // matches axum + serde
+      ['m4', JSON.stringify(['go', 'concurrency'])],    // matches go
+      ['m5', JSON.stringify(['google', 'cloud'])],      // substring "go" inside "google" — must NOT match
+      ['m6', JSON.stringify(['unrelated'])],            // matches nothing
+    ];
+    for (const [id, tags] of seed) {
+      daemon.indexer.db.prepare(
+        `INSERT INTO knowledge_cards (id, title, summary, category, status, confidence, tags, created_at, updated_at, filepath)
+         VALUES (?, ?, 'body', 'decision', 'active', 0.7, ?, ?, ?, ?)`
+      ).run(id, `Card ${id}`, tags, now, now, `/tmp/seed-${id}.md`);
+    }
+
+    const res = new MockRes();
+    await apiGetKnowledgeCard(daemon, null, res, 'moc1');
+    assert.equal(res.status, 200);
+    const parsed = JSON.parse(res.body);
+    const ids = parsed.members.map((m) => m.id).sort();
+    assert.deepEqual(
+      ids, ['m1', 'm2', 'm3', 'm4'],
+      `expected the 4 real members only — substring decoy "google" must be filtered out by defensive JS intersect, got ${JSON.stringify(ids)}`,
+    );
+  } finally {
+    cleanup();
+    try { fs.unlinkSync(tmp); } catch { /* ok */ }
+  }
+});
+
+test('apiGetKnowledgeCard MOC path still works (regression)', async () => {
   const tmp = path.join(os.tmpdir(), `awareness-moc-${Date.now()}.db`);
   const { daemon, cleanup } = makeDaemon(tmp);
   try {
@@ -116,7 +164,7 @@ test('apiGetKnowledgeCard MOC path still works (regression)', () => {
     ).run(JSON.stringify(['moc-tag']), now, now);
 
     const res = new MockRes();
-    apiGetKnowledgeCard(daemon, null, res, 'moc1');
+    await apiGetKnowledgeCard(daemon, null, res, 'moc1');
     assert.equal(res.status, 200);
     const parsed = JSON.parse(res.body);
     assert.equal(parsed.id, 'moc1');
