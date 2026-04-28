@@ -14,6 +14,8 @@ import { jsonResponse, readBody } from './helpers.mjs';
 import { loadScanConfig, saveScanConfig } from '../core/scan-config.mjs';
 import { track } from '../core/telemetry.mjs';
 
+const SQLITE_BATCH_SIZE = 400;
+
 // ---------------------------------------------------------------------------
 // GET /api/v1/scan/status
 // ---------------------------------------------------------------------------
@@ -220,7 +222,65 @@ export async function apiScanConfigUpdate(daemon, req, res) {
   }
 
   try {
+    const previous = loadScanConfig(daemon.projectDir);
     const saved = saveScanConfig(daemon.projectDir, body);
+    daemon.scanConfig = saved;
+
+    if (daemon.indexer?.db && previous.scan_code && saved.scan_code === false) {
+      const codeFileRows = daemon.indexer.db.prepare(`
+        SELECT id
+        FROM graph_nodes
+        WHERE node_type = 'file'
+          AND status = 'active'
+          AND json_extract(metadata, '$.category') = 'code'
+      `).all();
+
+      const codeFileIds = codeFileRows.map((row) => row.id);
+      if (codeFileIds.length > 0) {
+        const symbolIds = [];
+        for (const batch of chunkArray(codeFileIds, SQLITE_BATCH_SIZE)) {
+          const codePlaceholders = batch.map(() => '?').join(',');
+          const symbolRows = daemon.indexer.db.prepare(`
+            SELECT DISTINCT to_node_id AS id
+            FROM graph_edges
+            WHERE edge_type = 'contains'
+              AND from_node_id IN (${codePlaceholders})
+          `).all(...batch);
+          symbolIds.push(...symbolRows.map((row) => row.id).filter(Boolean));
+        }
+
+        const nodeIds = [...new Set([...codeFileIds, ...symbolIds])];
+        const now = new Date().toISOString();
+
+        for (const batch of chunkArray(nodeIds, SQLITE_BATCH_SIZE)) {
+          const nodePlaceholders = batch.map(() => '?').join(',');
+
+          daemon.indexer.db.prepare(`
+            UPDATE graph_nodes
+            SET status = 'deleted', updated_at = ?
+            WHERE id IN (${nodePlaceholders})
+          `).run(now, ...batch);
+
+          try {
+            daemon.indexer.db.prepare(`
+              DELETE FROM graph_embeddings
+              WHERE node_id IN (${nodePlaceholders})
+            `).run(...batch);
+          } catch { /* graph_embeddings may not exist yet */ }
+
+          daemon.indexer.db.prepare(`
+            DELETE FROM graph_edges
+            WHERE from_node_id IN (${nodePlaceholders})
+               OR to_node_id IN (${nodePlaceholders})
+          `).run(...batch, ...batch);
+        }
+
+        if (daemon.scanState) {
+          daemon.scanState.total_code_files = 0;
+        }
+      }
+    }
+
     return jsonResponse(res, saved);
   } catch (err) {
     return jsonResponse(res, { error: 'Failed to save: ' + err.message }, 500);
@@ -239,4 +299,12 @@ function safeJsonParse(str) {
 function safeJsonExtract(metadataStr, key) {
   const parsed = safeJsonParse(metadataStr);
   return parsed?.[key] ?? null;
+}
+
+function chunkArray(items, size) {
+  const chunks = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
 }

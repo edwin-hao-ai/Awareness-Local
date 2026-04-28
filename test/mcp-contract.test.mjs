@@ -101,7 +101,7 @@ test('buildInitResult keeps preference-first, active skills, and attention summa
   assert.equal(initResult.attention_summary.needs_attention, true);
   assert.ok(Array.isArray(initResult.knowledge_cards));
   assert.ok(initResult.rendered_context);
-  assert.match(initResult.rendered_context, /<current-focus>/);
+  assert.match(initResult.rendered_context, /Current focus/i);
   assert.match(initResult.rendered_context, /How should auth be implemented\?/);
 });
 

@@ -33,7 +33,7 @@ describe('getDefaultScanConfig', () => {
   it('returns a complete config with expected defaults', () => {
     const defaults = getDefaultScanConfig();
     assert.equal(defaults.enabled, true);
-    assert.equal(defaults.scan_code, true);
+    assert.equal(defaults.scan_code, false);  // v0.10+ default flipped to markdown-only
     assert.equal(defaults.scan_docs, true);
     assert.equal(defaults.scan_config, false);
     assert.equal(defaults.scan_convertible, true);
@@ -78,7 +78,7 @@ describe('loadScanConfig', () => {
     assert.equal(config.max_file_size_kb, 1000); // overridden
     assert.equal(config.scan_config, true);       // overridden
     assert.equal(config.enabled, true);           // default preserved
-    assert.equal(config.scan_code, true);         // default preserved
+    assert.equal(config.scan_code, false);        // v0.10+ default (markdown-only)
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
@@ -137,7 +137,7 @@ describe('saveScanConfig', () => {
     const result = saveScanConfig(dir, { enabled: false, max_file_size_kb: 2000 });
     assert.equal(result.enabled, false);
     assert.equal(result.max_file_size_kb, 2000);
-    assert.equal(result.scan_code, true); // default
+    assert.equal(result.scan_code, false); // v0.10+ default
 
     // Verify file was written
     const configPath = getScanConfigPath(dir);

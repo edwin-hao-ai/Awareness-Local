@@ -899,6 +899,27 @@ function applyStaticI18n() {
 async function api(path, options) {
   try { const r = await fetch(API + path, options); if (!r.ok) throw new Error('HTTP ' + r.status); return await r.json(); } catch (e) { console.error('[api]', path, e); return null; }
 }
+let workspaceDataLoadToken = 0;
+
+async function loadWorkspaceScannerData(token) {
+  try {
+    const [wsCodeRes, wsDocsRes, wsWikiRes, wsScanRes] = await Promise.all([
+      api('/scan/files?category=code&limit=200'),
+      api('/scan/files?category=docs&limit=100'),
+      api('/scan/files?category=wiki&limit=150'),
+      api('/scan/status'),
+    ]);
+    if (token !== workspaceDataLoadToken) return;
+    sidebarData.wsCode = wsCodeRes?.files || [];
+    sidebarData.wsDocs = wsDocsRes?.files || [];
+    sidebarData.wsWiki = wsWikiRes?.files || [];
+    sidebarData.scanStatus = wsScanRes || null;
+    renderSidebar(document.getElementById('sidebar-filter')?.value || '');
+  } catch (e) {
+    if (token !== workspaceDataLoadToken) return;
+    console.warn('[workspace] scan data load failed:', e);
+  }
+}
 function esc(s) { if (!s) return ''; return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 /** Escape a string for embedding in a single-quoted JS string inside an HTML onclick attribute. */
 function escJs(s) { if (!s) return ''; return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -1041,6 +1062,10 @@ async function loadSidebarData() {
   sidebarData.timeline = timelineRes?.by_day || [];
   sidebarData.perceptions = perceptionsRes?.items || [];
   sidebarData.perceptionCounts = perceptionsRes?.counts || {};
+  sidebarData.wsCode = [];
+  sidebarData.wsDocs = [];
+  sidebarData.wsWiki = [];
+  sidebarData.scanStatus = null;
   if (statsRes) statsData = statsRes;
   updateStatsBar();
 
@@ -1050,19 +1075,8 @@ async function loadSidebarData() {
 
   // Load workspace scanner data in background (non-blocking — may not be available)
   // Re-renders sidebar once workspace data arrives
-  try {
-    const [wsCodeRes, wsDocsRes, wsWikiRes, wsScanRes] = await Promise.all([
-      api('/scan/files?category=code&limit=500'),
-      api('/scan/files?category=docs&limit=200'),
-      api('/scan/files?category=wiki&limit=300'),
-      api('/scan/status'),
-    ]);
-    sidebarData.wsCode = wsCodeRes?.files || [];
-    sidebarData.wsDocs = wsDocsRes?.files || [];
-    sidebarData.wsWiki = wsWikiRes?.files || [];
-    sidebarData.scanStatus = wsScanRes || null;
-    renderSidebar(document.getElementById('sidebar-filter')?.value || '');
-  } catch (e) { console.warn('[workspace] scan data load failed:', e); }
+  const token = ++workspaceDataLoadToken;
+  void loadWorkspaceScannerData(token);
 }
 
 function renderSidebar(filter = '') {
@@ -2985,14 +2999,17 @@ async function loadWorkspacePicker() {
   const picker = document.getElementById('ws-picker');
   picker.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:0.82rem">Loading workspaces...</div>';
 
-  const ws = await api('/workspaces');
+  const ws = await api('/workspaces?limit=100');
   if (!ws || typeof ws !== 'object') {
     picker.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:0.82rem">No workspaces found.</div>';
     return;
   }
 
   // Filter out temp/test dirs, keep real user projects
-  const entries = Object.entries(ws)
+  const rawEntries = Array.isArray(ws.workspaces)
+    ? ws.workspaces.map((entry) => [entry.path, entry])
+    : Object.entries(ws);
+  const entries = rawEntries
     .filter(([dir]) => {
       if (dir.startsWith('/tmp/') || dir.startsWith('/private/tmp/') || dir.startsWith('/var/')) return false;
       if (dir.includes('awareness-local-smoke') || dir.includes('awareness-local-stop') ||

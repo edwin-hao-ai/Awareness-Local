@@ -15,6 +15,7 @@ const KNOWN_TOOLS = new Set([
   'awareness_apply_skill',
   'awareness_mark_skill_used',
   'awareness_workspace_search',
+  'awareness_publish_agent',
 ]);
 
 // F-053 post-0.8.0 defensive normalize: some MCP clients (incl. older
@@ -377,6 +378,66 @@ export async function callMcpTool(daemon, name, args) {
           total: formatted.length,
           query,
         });
+        break;
+      }
+
+      case 'awareness_publish_agent': {
+        // F-081 Part B vibe-publish.
+        // Two-phase: (a) if no manifest passed, return synthesis bundle for the
+        // host-LLM to fill in and call back; (b) if manifest passed, scan + POST
+        // to backend and return Dashboard URL.
+        const slug = args.slug;
+        if (!slug) {
+          result = mcpResult({ error: 'slug is required' });
+          break;
+        }
+        const description = args.description || '';
+        const kind = args.kind === 'memory_pack' ? 'memory_pack' : 'agent';
+
+        // Lazy import to avoid loading at daemon boot
+        const { assembleContextBundle, handlePublishAgent } = await import('./engine/publish-agent.mjs');
+
+        if (!args.manifest) {
+          // Phase A: return synthesis bundle. Host-LLM should call this tool again with manifest.
+          const bundle = assembleContextBundle({ daemon, slug, description });
+          result = mcpResult({
+            phase: 'synthesize',
+            bundle,
+            next_step: 'Synthesize a manifest from the bundle, then call awareness_publish_agent again with manifest=<your json>.',
+          });
+          break;
+        }
+
+        // Phase B: have manifest. Validate kind/slug and ship.
+        const manifest = { ...args.manifest, slug, category: kind === 'memory_pack' ? 'pack' : 'agent' };
+        if (!manifest.skill_md || !manifest.name) {
+          result = mcpResult({
+            error: 'manifest must include name and skill_md',
+            received_keys: Object.keys(manifest),
+          });
+          break;
+        }
+
+        const apiBase = daemon?.cloudConfig?.apiBase || daemon?.apiBase || process.env.AWARENESS_API_BASE_URL;
+        const apiKey = daemon?.cloudConfig?.apiKey || daemon?.apiKey;
+        const memoryId = daemon?.cloudConfig?.memoryId || daemon?.memoryId;
+        if (!apiBase || !apiKey) {
+          result = mcpResult({
+            error: 'cloud_not_configured: vibe-publish requires cloud auth. Run `npx @awareness-sdk/setup --cloud` to link a memory.',
+          });
+          break;
+        }
+
+        const r = await handlePublishAgent({
+          daemon,
+          draft: manifest,
+          apiBase,
+          apiKey,
+          memoryId,
+          context: assembleContextBundle({ daemon, slug, description }),
+          runtimeSource: daemon?.runtime || 'local-daemon',
+        });
+        result = mcpResult(r);
         break;
       }
 

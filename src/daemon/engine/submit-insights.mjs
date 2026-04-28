@@ -19,6 +19,7 @@ import {
   checkTaskDedup,
 } from '../../core/lifecycle-manager.mjs';
 import { nowISO } from '../helpers.mjs';
+import { writeCardToWiki } from './wiki-write.mjs';
 import {
   findEvolutionTarget,
   supersedeCard,
@@ -134,7 +135,31 @@ function _checkCrystallizationLocal(db, newCard) {
  * @returns {Promise<object>}
  */
 export async function submitInsights(daemon, params) {
-  const insights = params.insights || {};
+  // Accept insights from `params.insights` (preferred) or fall back to
+  // `params.content` when an LLM mistakenly serialised the JSON payload
+  // into the content slot (matches the legacy extraction-instruction wording
+  // shipped by the cloud MCP before the v0.11.x fix).
+  let insights = params.insights || {};
+  if ((!insights || typeof insights !== 'object' || Object.keys(insights).length === 0) && params.content != null) {
+    if (typeof params.content === 'string') {
+      const trimmed = params.content.trim();
+      if (trimmed.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (parsed && typeof parsed === 'object') {
+            insights = parsed;
+          }
+        } catch {
+          /* not JSON — fall through */
+        }
+      }
+    } else if (typeof params.content === 'object' && !Array.isArray(params.content)) {
+      const ck = new Set(Object.keys(params.content || {}));
+      if (ck.has('knowledge_cards') || ck.has('action_items') || ck.has('risks') || ck.has('skills') || ck.has('turn_brief')) {
+        insights = params.content;
+      }
+    }
+  }
   let cardsCreated = 0;
   let tasksCreated = 0;
 
@@ -235,6 +260,32 @@ ${card.summary || card.title || ''}
         evolution_type: evolutionType,
       };
       daemon.indexer.indexKnowledgeCard(cardData);
+
+      // F-082 Phase 0-3 · additive markdown wiki write (event-driven, never blocks main path)
+      try {
+        const r = writeCardToWiki({
+          awarenessDir: daemon.awarenessDir,
+          card: {
+            id: cardId,
+            category: cardData.category,
+            title: cardData.title,
+            summary: cardData.summary,
+            topic: Array.isArray(card.topic) ? card.topic : [],
+            entities: Array.isArray(card.entities) ? card.entities : [],
+            related: Array.isArray(card.related) ? card.related : [],
+            tags: cardData.tags,
+            confidence: cardData.confidence,
+            status: cardData.status,
+            created_at: cardData.created_at,
+          },
+        });
+        if (r.warnings.length && process.env.DEBUG) {
+          console.warn('[wiki-write] warnings:', r.warnings.join('; '));
+        }
+      } catch (err) {
+        if (process.env.DEBUG) console.warn('[wiki-write] failed:', err.message);
+        // intentionally swallow — markdown is additive, must not block SQLite write
+      }
 
       // F-059 recall boost · also generate an embedding for the card
       // so the semantic channel has material to rank against. Previously

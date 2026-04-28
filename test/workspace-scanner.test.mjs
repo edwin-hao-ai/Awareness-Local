@@ -36,6 +36,22 @@ function createTree(root, spec) {
   }
 }
 
+// v0.10+ flipped scan_code to false by default. Existing tests assume
+// "scan everything" semantics; keep that behaviour explicit here so tests
+// remain meaningful and don't break on every default-tweak.
+const FULL_SCAN = {
+  config: {
+    enabled: true,
+    scan_code: true,
+    scan_docs: true,
+    scan_config: false,
+    scan_convertible: true,
+    max_depth: 15,
+    max_total_files: 10000,
+    max_file_size_kb: 500,
+  },
+};
+
 // ---------------------------------------------------------------------------
 // scanWorkspace Tests
 // ---------------------------------------------------------------------------
@@ -54,7 +70,7 @@ describe('scanWorkspace', () => {
       'docs/guide.txt': 'guide content',
     });
 
-    const files = scanWorkspace(tmpDir);
+    const files = scanWorkspace(tmpDir, FULL_SCAN);
     assert.equal(files.length, 4);
 
     const categories = files.map(f => f.category);
@@ -69,7 +85,7 @@ describe('scanWorkspace', () => {
       '.git/config': 'git config',
     });
 
-    const files = scanWorkspace(tmpDir);
+    const files = scanWorkspace(tmpDir, FULL_SCAN);
     assert.equal(files.length, 1);
     assert.equal(files[0].relativePath, path.join('src', 'app.ts'));
   });
@@ -83,7 +99,7 @@ describe('scanWorkspace', () => {
       'id_rsa': 'private key',
     });
 
-    const files = scanWorkspace(tmpDir);
+    const files = scanWorkspace(tmpDir, FULL_SCAN);
     assert.equal(files.length, 1);
     assert.equal(path.basename(files[0].relativePath), 'app.ts');
   });
@@ -98,7 +114,7 @@ describe('scanWorkspace', () => {
       'image.png': 'binary',
     });
 
-    const files = scanWorkspace(tmpDir);
+    const files = scanWorkspace(tmpDir, FULL_SCAN);
     assert.equal(files.length, 1);
   });
 
@@ -110,7 +126,7 @@ describe('scanWorkspace', () => {
       'debug.log': 'log content',
     });
 
-    const files = scanWorkspace(tmpDir);
+    const files = scanWorkspace(tmpDir, FULL_SCAN);
     assert.equal(files.length, 1);
     assert.equal(path.basename(files[0].relativePath), 'app.ts');
   });
@@ -120,6 +136,9 @@ describe('scanWorkspace', () => {
     const awarenessDir = path.join(tmpDir, '.awareness');
     fs.mkdirSync(awarenessDir, { recursive: true });
     fs.writeFileSync(path.join(awarenessDir, 'scan-config.json'), JSON.stringify({
+      // v0.10+ default is scan_code=false; this test cares about exclude
+      // patterns over code files, so opt code scanning back on explicitly.
+      scan_code: true,
       exclude: ['test/**', 'fixtures/**'],
     }));
 
@@ -129,6 +148,9 @@ describe('scanWorkspace', () => {
       'fixtures/data.json': '{}',
     });
 
+    // Intentionally do NOT pass FULL_SCAN — this test verifies that
+    // scanWorkspace LOADS the on-disk scan-config.json (with both the
+    // exclude patterns AND scan_code: true).
     const files = scanWorkspace(tmpDir);
     assert.equal(files.length, 1);
     assert.equal(path.basename(files[0].relativePath), 'app.ts');
@@ -183,7 +205,7 @@ describe('scanWorkspace', () => {
       'small.ts': 'const x = 1;',
     });
 
-    const files = scanWorkspace(tmpDir);
+    const files = scanWorkspace(tmpDir, FULL_SCAN);
     const big = files.find(f => f.relativePath.endsWith('big.ts'));
     const small = files.find(f => f.relativePath.endsWith('small.ts'));
     assert.ok(big?.oversized);
@@ -219,7 +241,7 @@ describe('scanWorkspace', () => {
       '.awareness/knowledge/card.md': 'card',
     });
 
-    const files = scanWorkspace(tmpDir);
+    const files = scanWorkspace(tmpDir, FULL_SCAN);
     assert.equal(files.length, 1);
     assert.equal(path.basename(files[0].relativePath), 'app.ts');
   });

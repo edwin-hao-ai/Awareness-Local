@@ -11,7 +11,9 @@ import {
   apiTelemetryStatus, apiTelemetryEnable,
   apiTelemetryRecent, apiTelemetryDelete, apiTelemetryTrack,
 } from './telemetry-api-handlers.mjs';
+import { apiPromptInject } from './prompt-injector.mjs';
 import { track } from '../core/telemetry.mjs';
+import { isUnsafeWorkspaceRoot } from '../core/workspace-root.mjs';
 
 export async function handleApiRoute(daemon, req, res, url) {
   const route = url.pathname.replace('/api/v1', '');
@@ -27,6 +29,11 @@ export async function handleApiRoute(daemon, req, res, url) {
 
   if (route === '/memories/search' && req.method === 'GET') {
     return apiSearchMemories(daemon, req, res, url);
+  }
+
+  // F-072 · host-LLM friendly prompt injector (no-key, read-only)
+  if (route === '/prompt/inject' && req.method === 'GET') {
+    return apiPromptInject(daemon, req, res, url);
   }
 
   if (route === '/knowledge' && req.method === 'GET') {
@@ -496,6 +503,12 @@ export async function apiWorkspaces(res, url) {
   try {
     const { loadWorkspaces } = await import('../core/config.mjs');
     const ws = loadWorkspaces() || {};
+    const sanitizedEntries = Object.entries(ws).filter(([workspacePath]) => {
+      const resolved = path.resolve(workspacePath);
+      if (isUnsafeWorkspaceRoot(resolved)) return false;
+      if (!fs.existsSync(resolved)) return false;
+      return true;
+    });
 
     const limitRaw = url?.searchParams?.get('limit');
     const q = (url?.searchParams?.get('q') || '').trim().toLowerCase();
@@ -504,13 +517,12 @@ export async function apiWorkspaces(res, url) {
     // Back-compat: no limit + no query → return the raw map.
     if (limit === null && !q) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify(ws));
+      return res.end(JSON.stringify(Object.fromEntries(sanitizedEntries)));
     }
 
-    const entries = Object.entries(ws);
     const filtered = q
-      ? entries.filter(([p]) => p.toLowerCase().includes(q))
-      : entries;
+      ? sanitizedEntries.filter(([p]) => p.toLowerCase().includes(q))
+      : sanitizedEntries;
     filtered.sort(([, a], [, b]) => {
       const ta = Date.parse(a?.lastUsed || '') || 0;
       const tb = Date.parse(b?.lastUsed || '') || 0;

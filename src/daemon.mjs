@@ -61,6 +61,7 @@ import { loadScanConfig } from './core/scan-config.mjs';
 import { initTelemetry, getTelemetry, track } from './core/telemetry.mjs';
 import { loadGitignoreRules } from './core/gitignore-parser.mjs';
 import { classifyFile } from './core/scan-defaults.mjs';
+import { assertSafeWorkspaceRoot } from './core/workspace-root.mjs';
 import {
   backfillEmbeddings,
   embedAndStore,
@@ -134,7 +135,7 @@ export class AwarenessLocalDaemon {
    */
   constructor(options = {}) {
     this.port = options.port || DEFAULT_PORT;
-    this.projectDir = options.projectDir || process.cwd();
+    this.projectDir = assertSafeWorkspaceRoot(options.projectDir || process.cwd(), 'daemon workspace');
     this.guardProfile = options.guardProfile || detectGuardProfile(this.projectDir);
 
     this.awarenessDir = path.join(this.projectDir, AWARENESS_DIR);
@@ -384,6 +385,11 @@ export class AwarenessLocalDaemon {
       clearInterval(this._graphMaintenanceTimer);
       this._graphMaintenanceTimer = null;
     }
+    if (this._graphEmbeddingKickoffTimer) {
+      clearTimeout(this._graphEmbeddingKickoffTimer);
+      this._graphEmbeddingKickoffTimer = null;
+    }
+    this._graphEmbeddingPending = false;
 
     // Stop workspace watchers (F-038)
     if (this._scanAbortController) {
@@ -881,14 +887,15 @@ export class AwarenessLocalDaemon {
    * Closes current indexer/search, re-initializes with new project's .awareness/ data.
    */
   async switchProject(newProjectDir) {
-    if (!fs.existsSync(newProjectDir)) {
+    const safeProjectDir = assertSafeWorkspaceRoot(newProjectDir, 'daemon workspace');
+    if (!fs.existsSync(safeProjectDir)) {
       throw new Error(`Project directory does not exist: ${newProjectDir}`);
     }
 
     this._switching = true;
     try {
-      const newAwarenessDir = path.join(newProjectDir, AWARENESS_DIR);
-      console.log(`[awareness-local] switching project: ${this.projectDir} → ${newProjectDir}`);
+      const newAwarenessDir = path.join(safeProjectDir, AWARENESS_DIR);
+      console.log(`[awareness-local] switching project: ${this.projectDir} → ${safeProjectDir}`);
 
       // 1. Stop watchers & timers
       if (this.watcher) { this.watcher.close(); this.watcher = null; }
@@ -907,6 +914,11 @@ export class AwarenessLocalDaemon {
         try { this._gitHeadWatcher.close(); } catch { /* best-effort */ }
         this._gitHeadWatcher = null;
       }
+      if (this._graphEmbeddingKickoffTimer) {
+        clearTimeout(this._graphEmbeddingKickoffTimer);
+        this._graphEmbeddingKickoffTimer = null;
+      }
+      this._graphEmbeddingPending = false;
       if (this._scanAbortController) {
         try { this._scanAbortController.abort(); } catch { /* best-effort */ }
         this._scanAbortController = null;
@@ -935,7 +947,7 @@ export class AwarenessLocalDaemon {
       }
 
       // 3. Update project paths
-      this.projectDir = newProjectDir;
+      this.projectDir = safeProjectDir;
       this.guardProfile = detectGuardProfile(this.projectDir);
       this.awarenessDir = newAwarenessDir;
       this.pidFile = path.join(this.awarenessDir, PID_FILENAME);
@@ -978,7 +990,7 @@ export class AwarenessLocalDaemon {
       // 8. Update workspace registry
       try {
         const { registerWorkspace } = await import('./core/config.mjs');
-        registerWorkspace(newProjectDir, { port: this.port });
+        registerWorkspace(safeProjectDir, { port: this.port });
       } catch { /* config.mjs not available */ }
 
       // 9. F-055b P0 — re-initialise the workspace scanner against the
@@ -999,8 +1011,8 @@ export class AwarenessLocalDaemon {
         console.error('[workspace-scanner] re-init after switch failed:', err.message);
       }
 
-      console.log(`[awareness-local] switched to: ${newProjectDir} (${this.indexer.getStats().totalMemories} memories)`);
-      return { projectDir: newProjectDir, stats: this.indexer.getStats() };
+      console.log(`[awareness-local] switched to: ${safeProjectDir} (${this.indexer.getStats().totalMemories} memories)`);
+      return { projectDir: safeProjectDir, stats: this.indexer.getStats() };
     } finally {
       this._switching = false;
     }

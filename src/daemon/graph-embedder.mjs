@@ -20,7 +20,7 @@ import { detectNeedsCJK } from '../core/lang-detect.mjs';
 // ---------------------------------------------------------------------------
 
 /** Max texts per embedBatch call — keeps ONNX WASM memory bounded. */
-const BATCH_SIZE = 32;
+const BATCH_SIZE = 16;
 
 /** Max characters per text for embedding input — truncate longer content. */
 const MAX_EMBED_CHARS = 1500;
@@ -106,19 +106,40 @@ export async function embedGraphNodes(daemon, options = {}) {
     return { embedded: 0, skipped: 0, total: 0 };
   }
 
-  console.log(`[graph-embedder] Embedding ${total} graph nodes...`);
+  // 0.11.2 · hard cap on embedding work per pass to prevent UI hang on
+  // huge workspaces (e.g. switching INTO the Awareness monorepo with
+  // 11k+ graph nodes pegged CPU at 359% and crashed `/healthz`).
+  // Process at most this many nodes per pass; subsequent passes pick up
+  // remaining nodes incrementally during normal operation.
+  const maxPerPass = options.maxEmbedPerPass ?? Number(process.env.AWARENESS_GRAPH_EMBED_MAX_PER_PASS || 256);
+  const maxElapsedMs = options.maxElapsedMs ?? 10_000;
+  const workSet = total > maxPerPass ? unembedded.slice(0, maxPerPass) : unembedded;
+  if (total > maxPerPass) {
+    console.log(
+      `[graph-embedder] Large workspace (${total} unembedded). ` +
+      `Embedding ${workSet.length} nodes this pass; rest will catch up incrementally. ` +
+      `(Override via env AWARENESS_GRAPH_EMBED_MAX_PER_PASS.)`
+    );
+  } else {
+    console.log(`[graph-embedder] Embedding ${total} graph nodes (budget ${maxElapsedMs}ms)...`);
+  }
   const t0 = Date.now();
 
   let embedded = 0;
   let skipped = 0;
 
+  const targetCount = workSet.length;
   // Process in batches
-  for (let i = 0; i < total; i += BATCH_SIZE) {
+  for (let i = 0; i < targetCount; i += BATCH_SIZE) {
     if (signal?.aborted) {
-      console.log(`[graph-embedder] embed aborted at ${embedded}/${total}`);
-      return { embedded, skipped, total, aborted: true };
+      console.log(`[graph-embedder] embed aborted at ${embedded}/${targetCount}`);
+      return { embedded, skipped, total, remaining: Math.max(0, total - embedded - skipped), aborted: true };
     }
-    const batch = unembedded.slice(i, i + BATCH_SIZE);
+    if (Date.now() - t0 > maxElapsedMs) {
+      console.log(`[graph-embedder] embed time-budget exceeded (${maxElapsedMs}ms) at ${embedded}/${targetCount}`);
+      return { embedded, skipped, total, remaining: Math.max(0, total - embedded - skipped), aborted: 'budget' };
+    }
+    const batch = workSet.slice(i, i + BATCH_SIZE);
     const texts = batch.map(prepareEmbedText);
 
     // Filter out empty texts
@@ -179,7 +200,7 @@ export async function embedGraphNodes(daemon, options = {}) {
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`[graph-embedder] Embedding complete: ${embedded} embedded, ${skipped} skipped in ${elapsed}s`);
 
-  return { embedded, skipped, total };
+  return { embedded, skipped, total, remaining: Math.max(0, total - embedded - skipped) };
 }
 
 // ---------------------------------------------------------------------------
@@ -213,6 +234,16 @@ export async function generateSimilarityEdges(daemon, options = {}) {
   // a 200 ms healthz timeout. 8 keeps the burst ≤ ~50 ms.
   const yieldEvery = options.yieldEvery ?? 8;
   const signal = options.signal;
+  // 0.11.2 · hard cap to prevent UI lock-up on huge workspaces.
+  // User reported workspace switch hanging when entering /Users/<...>/Awareness
+  // (11,667 graph nodes). O(n²) similarity inside a single type-group is
+  // 30M+ comparisons even with split-by-type. We bail out when there are
+  // more than MAX_NODES_FOR_SIMILARITY total embeddings; the user can still
+  // do recall via FTS5 + per-card embedding (which doesn't need this graph).
+  const maxNodes = options.maxNodesForSimilarity ?? Number(process.env.AWARENESS_GRAPH_SIM_MAX_NODES || 2000);
+  // Time budget — abort gracefully even if signal not raised. 30s is the
+  // upper bound users reported tolerating before considering the daemon hung.
+  const maxElapsedMs = options.maxElapsedMs ?? 30_000;
 
   // Snapshot indexer — mirrors embedGraphNodes. Without this we'd write
   // B's similarity edges into C's DB after a switch, because daemon.indexer
@@ -227,7 +258,16 @@ export async function generateSimilarityEdges(daemon, options = {}) {
     return { edgesCreated: 0, nodesProcessed: 0 };
   }
 
-  console.log(`[graph-embedder] Computing similarity edges for ${count} nodes...`);
+  if (count > maxNodes) {
+    console.log(
+      `[graph-embedder] Skipping similarity edges: ${count} nodes > cap ${maxNodes}. ` +
+      `Recall via FTS5 + per-card embedding still works. ` +
+      `(Override via env AWARENESS_GRAPH_SIM_MAX_NODES.)`
+    );
+    return { edgesCreated: 0, nodesProcessed: count, skipped_too_large: true };
+  }
+
+  console.log(`[graph-embedder] Computing similarity edges for ${count} nodes (budget ${maxElapsedMs}ms)...`);
   const t0 = Date.now();
 
   // Group by node_type prefix for same-type comparison
@@ -294,6 +334,11 @@ export async function generateSimilarityEdges(daemon, options = {}) {
         if (signal?.aborted) {
           console.log(`[graph-embedder] similarity aborted at ${edgesCreated} edges`);
           return { edgesCreated, nodesProcessed: count, aborted: true };
+        }
+        // 0.11.2 · time-budget abort independent of caller signal
+        if (Date.now() - t0 > maxElapsedMs) {
+          console.log(`[graph-embedder] similarity time-budget exceeded (${maxElapsedMs}ms) at ${edgesCreated} edges`);
+          return { edgesCreated, nodesProcessed: count, aborted: 'budget' };
         }
       }
     }

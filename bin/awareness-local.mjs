@@ -20,6 +20,7 @@ import path from 'node:path';
 import os from 'node:os';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
+import { assertSafeWorkspaceRoot } from '../src/core/workspace-root.mjs';
 
 // ---------------------------------------------------------------------------
 // Argv parsing
@@ -225,7 +226,7 @@ function processExists(pid) {
  * With --foreground: imports and runs the daemon in-process.
  */
 async function cmdStart(flags) {
-  const projectDir = resolveProjectDir(flags);
+  const projectDir = assertSafeWorkspaceRoot(resolveProjectDir(flags), 'daemon workspace');
   const port = resolvePort(flags, projectDir);
   const foreground = flags.foreground === true;
 
@@ -607,7 +608,7 @@ async function cmdReindex(flags) {
  * Run as a stdio MCP server (for IDE integrations like Claude Code).
  */
 async function cmdMcp(flags) {
-  const projectDir = resolveProjectDir(flags);
+  const projectDir = assertSafeWorkspaceRoot(resolveProjectDir(flags), 'stdio workspace');
   const port = resolvePort(flags);
 
   const { startStdioMcp } = await import('../src/mcp-stdio.mjs');

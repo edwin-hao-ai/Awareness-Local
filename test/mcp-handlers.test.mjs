@@ -364,7 +364,7 @@ describe('buildInitResult', () => {
     assert.equal(result.user_preferences.length, 0, 'low-confidence persona dropped without focus');
   });
 
-  it('rendered_context is a string containing XML', () => {
+  it('rendered_context is a markdown string containing the card title', () => {
     const indexer = createMockIndexer({
       cards: [makeCard('kc1', 'Some card')],
     });
@@ -376,17 +376,32 @@ describe('buildInitResult', () => {
     });
 
     assert.equal(typeof result.rendered_context, 'string');
+    // Post 2026-04-20: body is markdown (not XML), per user directive
+    // "markdown-first, memory content only". But <awareness-memory> wrapper
+    // is retained as a load-bearing string anchor — sdks/openclaw/src/hooks.ts
+    // uses `.replace("</awareness-memory>", ...)` to inject perception
+    // signals, record-rule, and dashboard hints. Dropping the wrapper
+    // silently loses those injections.
     assert.ok(
-      result.rendered_context.includes('<awareness-memory>'),
-      'rendered_context should contain <awareness-memory> XML tag'
+      result.rendered_context.startsWith('<awareness-memory>'),
+      'rendered_context must start with <awareness-memory> (openclaw hooks contract)'
     );
     assert.ok(
-      result.rendered_context.includes('</awareness-memory>'),
-      'rendered_context should contain closing tag'
+      result.rendered_context.endsWith('</awareness-memory>'),
+      'rendered_context must end with </awareness-memory> (openclaw hooks contract)'
+    );
+    assert.match(
+      result.rendered_context,
+      /^##\s/m,
+      'rendered_context body should contain at least one markdown heading'
+    );
+    assert.ok(
+      result.rendered_context.includes('Some card'),
+      'rendered_context should reference the knowledge card'
     );
   });
 
-  it('includes init_guides from spec and empty agent_profiles', () => {
+  it('init_guides field is preserved for schema compat (empty for local daemon)', () => {
     const guides = { sub_agent_guide: 'You are a helpful agent.' };
     const indexer = createMockIndexer();
     const result = buildInitResult({
@@ -396,7 +411,10 @@ describe('buildInitResult', () => {
       source: 'test',
     });
 
-    assert.deepEqual(result.init_guides, guides);
+    // Field shape preserved so downstream `result.init_guides?.xxx` doesn't
+    // throw, but content is no longer inlined (saves ~7500 chars/init).
+    // Consumers that need the guide text load it from spec.json directly.
+    assert.deepEqual(result.init_guides, {});
     assert.deepEqual(result.agent_profiles, []);
   });
 });
@@ -449,16 +467,16 @@ describe('_buildInitPerception (via buildInitResult rendered_context)', () => {
       source: 'test',
     });
 
-    const xml = result.rendered_context;
-    const stalenessMatches = xml.match(/type="staleness"/g) || [];
+    const md = result.rendered_context;
+    const stalenessMatches = md.match(/\[staleness\]/g) || [];
     assert.ok(stalenessMatches.length <= 2, `staleness signals should be capped at 2, got ${stalenessMatches.length}`);
     // First two stale cards should appear as staleness signals, third should not
-    assert.ok(xml.includes('Stale Card AAA') && xml.includes('Stale Card BBB'),
+    assert.ok(md.includes('Stale Card AAA') && md.includes('Stale Card BBB'),
       'first two stale cards should appear as staleness signals');
-    // Count only within perception section: only 2 staleness signal elements
-    const perceptionBlock = xml.split('<perception>')[1]?.split('</perception>')[0] || '';
-    const perceptionStaleness = (perceptionBlock.match(/type="staleness"/g) || []).length;
-    assert.equal(perceptionStaleness, 2, 'perception section should have exactly 2 staleness signals');
+    // Count only within Attention section: only 2 staleness signal bullets
+    const attentionBlock = md.split('## Attention')[1]?.split(/^## /m)[0] || '';
+    const attentionStaleness = (attentionBlock.match(/\[staleness\]/g) || []).length;
+    assert.equal(attentionStaleness, 2, 'Attention section should have exactly 2 staleness signals');
   });
 
   it('generates guard signals from pitfall/risk cards', () => {

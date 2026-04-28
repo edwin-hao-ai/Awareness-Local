@@ -1,4 +1,3 @@
-import { buildContextXml } from '../harness-builder.mjs';
 import { PERSONAL_CARD_CATEGORIES } from './constants.mjs';
 import {
   buildRecallFullContent,
@@ -12,6 +11,84 @@ import {
   splitPreferences,
   synthesizeRules,
 } from './helpers.mjs';
+
+// Strip DB row to just the index fields. The narrative content (summary) is
+// rendered inline in `rendered_context` markdown below — duplicating it here
+// as JSON doubles the payload for no LLM benefit. Callers that need a specific
+// card's full summary can call `awareness_recall(ids=[...], detail="full")`.
+function trimCardForInit(card) {
+  if (!card) return card;
+  return {
+    id: card.id,
+    category: card.category,
+    title: card.title,
+  };
+}
+
+// Markdown renderer for init memory context. Preferred over XML because:
+//   - no tag-overhead (every <card>…</card> adds ~15 chars of zero-info markup)
+//   - Claude/GPT training data is markdown-heavy, so it parses more reliably
+//   - humans reading logs can actually skim it
+// Output is bounded: each section caps at N items to keep token budget sane.
+function buildMemoryMarkdown(ctx, perceptionSignals, options = {}) {
+  const lines = [];
+  const emitSection = (heading, items, fmt) => {
+    if (!items || items.length === 0) return;
+    lines.push(`## ${heading}`);
+    for (const item of items) lines.push(fmt(item));
+    lines.push('');
+  };
+
+  if (options.currentFocus) {
+    lines.push('## Current focus');
+    lines.push(String(options.currentFocus).trim());
+    lines.push('');
+  }
+
+  const skills = ctx.active_skills || [];
+  emitSection('Active skills', skills, (s) =>
+    `- **${s.title || s.id}** — ${s.summary || ''}`);
+
+  const perception = (perceptionSignals || []).filter((s) => s.message);
+  emitSection('Attention', perception, (s) =>
+    `- [${s.type || 'signal'}] ${s.message}`);
+
+  const prefs = ctx.user_preferences || [];
+  emitSection('User preferences', prefs, (p) => {
+    const rule = (p.actionable_rule || '').trim();
+    return rule
+      ? `- [${p.category || ''}] ${rule}`
+      : `- [${p.category || ''}] **${p.title || ''}** — ${p.summary || ''}`;
+  });
+
+  // Full summary inlined here (the one place it lives for LLM consumption)
+  const knowledge = (ctx.knowledge_cards_full || ctx.knowledge_cards || []).slice(0, 12);
+  emitSection('Knowledge', knowledge, (c) => {
+    const rule = (c.actionable_rule || '').trim();
+    return rule
+      ? `- [${c.category || ''}] ${rule}`
+      : `- [${c.category || ''}] **${c.title || ''}** — ${c.summary || ''}`;
+  });
+
+  const tasks = (ctx.open_tasks || []).slice(0, 10);
+  emitSection('Open tasks', tasks, (t) =>
+    `- [${t.priority || 'medium'}/${t.status || 'pending'}] ${t.title || ''}`);
+
+  const sessions = (ctx.recent_sessions || []).slice(0, 5);
+  emitSection('Recent sessions', sessions, (s) => {
+    const events = s.event_count || s.memory_count || 0;
+    return `- ${s.date || ''} (${events} events) ${s.summary || ''}`;
+  });
+
+  // Wrap the markdown body in <awareness-memory> tags. This is a load-bearing
+  // contract with sdks/openclaw/src/hooks.ts which uses `.replace("</awareness-memory>", ...)`
+  // at four sites to inject perception signals, record-rule, and dashboard
+  // hints. Dropping the wrapper would silently lose those injections. The
+  // body between the tags is still markdown (headings, bullets), so LLMs
+  // parse it naturally — the wrapper is only a string anchor for clients.
+  const body = lines.join('\n').trim();
+  return `<awareness-memory>\n${body}\n</awareness-memory>`;
+}
 
 /**
  * Select the most relevant knowledge cards for the current context.
@@ -105,7 +182,8 @@ export function buildInitResult({
   const gatedPersona = filterPersonaByRelevance(personaCandidates, indexer, focus);
 
   const { knowledge_cards: otherCards } = splitPreferences(recentCards);
-  const user_preferences = gatedPersona;
+  const user_preferences = gatedPersona.map(trimCardForInit);
+  const trimmedKnowledgeCards = otherCards.map(trimCardForInit);
 
   // Build lightweight perception signals for init (staleness + pitfall guards)
   const initPerception = _buildInitPerception(indexer, allActiveCards);
@@ -126,25 +204,44 @@ export function buildInitResult({
     }
   } catch { /* graph tables may not exist yet */ }
 
+  // Field shape stays stable for downstream clients (setup-cli, AwarenessClaw,
+  // cloud SDKs). Previously-heavy fields are preserved as empty values so
+  // `result.init_guides?.write_guide` etc. still resolve (to undefined),
+  // instead of throwing on missing property access.
+  //
+  //   - `init_guides` emptied: real consumers (extraction-instruction.mjs,
+  //     sub_agent_guide) read spec.json directly via loadSpec(), not from init.
+  //   - `agent_profiles` stays []: local daemon never populated it; cloud-only.
+  //   - `setup_hints` stays []: local daemon never populated it.
   const initResult = {
     session_id: session.id,
     mode: 'local',
     user_preferences,
-    knowledge_cards: otherCards,
+    knowledge_cards: trimmedKnowledgeCards,
     open_tasks: openTasks,
     recent_sessions: recentSessions,
     stats,
     attention_summary: attentionSummary,
     synthesized_rules: { rules, rule_count },
-    init_guides: spec.init_guides || {},
+    init_guides: {},
     agent_profiles: [],
     active_skills: activeSkills,
     setup_hints: [],
     workspace_summary: workspaceSummary,
   };
 
+  // Render memory-only narrative in markdown. Uses the un-trimmed cards so
+  // summary text survives; `knowledge_cards` above stays as a lightweight
+  // index. `init_guides` / `setup_hints` / `agent_profiles` are product
+  // documentation, not memory — deliberately omitted per user request
+  // 2026-04-20: "only memory-related content, drop the rest".
   try {
-    initResult.rendered_context = buildContextXml(initResult, [], initPerception, renderContextOptions);
+    const fullCtx = {
+      ...initResult,
+      knowledge_cards_full: otherCards,
+      user_preferences: gatedPersona,
+    };
+    initResult.rendered_context = buildMemoryMarkdown(fullCtx, initPerception, renderContextOptions);
   } catch {
     // Non-fatal — client can still use structured data
   }
@@ -329,6 +426,25 @@ export async function buildRecallResult({ search, args, mode = 'local', indexer 
   if (!summaries.length) {
     return buildRecallNoResultsContent();
   }
+
+  // F-083 Phase 4: decorate each summary with the wiki_path so agents can
+  // WebFetch the canonical .md file. Computed deterministically from the
+  // same slug rule that wiki-write uses on awareness_record.
+  try {
+    const { resolveCardPath } = await import('../core/markdown-tree.mjs');
+    for (const s of summaries) {
+      if (s && s.title && s.category && !s.wiki_path) {
+        try {
+          const r = resolveCardPath('', {
+            category: s.category,
+            title: s.title,
+            created_at: s.created_at,
+          });
+          s.wiki_path = r.relPath;  // relative to ~/.awareness/
+        } catch { /* best-effort decoration */ }
+      }
+    }
+  } catch { /* markdown-tree not available — older daemon */ }
 
   const result = buildRecallSummaryContent(summaries, mode);
 

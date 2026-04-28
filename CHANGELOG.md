@@ -1,5 +1,184 @@
 # Changelog
 
+## [0.11.6] - 2026-04-29
+
+### Fixed — docs-only onboarding, workspace UI loading, and graph embedding throttling
+
+- Onboarding now writes markdown-only scan settings before it triggers the
+  first workspace scan, so fresh local installs no longer silently re-enable
+  code scanning during setup.
+- `scan-config` legacy migration now preserves old `scan_code=true` behavior
+  only when the workspace index actually contains active code file nodes.
+  A docs-only `.awareness/index.db` no longer gets misclassified as a legacy
+  code-heavy install.
+- Turning `scan_code` off now prunes existing code file and symbol graph nodes
+  in batches from SQLite, which immediately shrinks live recall scope instead
+  of waiting for a future reindex.
+- Workspace picker and sidebar scanner data now load in the background, so the
+  local web UI no longer gets stuck on loading when switching workspaces or
+  opening docs-heavy projects.
+- Graph embedding now runs in smaller passes, coalesces duplicate triggers,
+  and automatically schedules follow-up passes while backlog remains. This
+  reduces CPU and RSS spikes on large repos without leaving the graph half-
+  embedded forever.
+
+## [0.11.5] - 2026-04-28
+
+### Fixed — workspace root safety and daemon workspace alignment
+
+- `awareness-local start` and stdio MCP startup now reject using the exact
+  home directory as the workspace root, so a misconfigured client no longer
+  creates `~/.awareness` and recursively scans the whole home directory.
+- stdio auto-start now always passes the requested `--project` to the daemon,
+  sends workspace identity headers on every `/mcp` request, and auto-switches
+  an already-running daemon onto the requested workspace before proxying.
+- MCP proxy retries now self-heal transient `project_mismatch` and
+  `project_switching` races during hot workspace switches instead of surfacing
+  spurious user-visible failures.
+
+## [0.11.4] - 2026-04-27
+
+### Added — defensive submit_insights fallback for legacy LLM clients
+
+- `daemon/engine/submit-insights.mjs` now accepts the insights payload via
+  either `params.insights` (preferred) or `params.content` (legacy / fallback
+  when an LLM follows the old extraction-instruction wording). Mirrors the
+  cloud MCP fix shipped today so end-to-end clients always create cards
+  regardless of which slot the LLM serialised the JSON into.
+- No behavior change for callers that already pass `insights={...}`.
+
+## [0.11.3] - 2026-04-27
+
+### Fixed — graph-embedder full fix: bound BOTH embed and similarity
+
+0.11.2 only capped the similarity step. Live testing showed the
+**embedding** step itself (per-node ML inference) also pegged CPU at
+359% with RSS past 1 GB on the Awareness monorepo (11,330 unembedded
+graph nodes), tripping `/healthz` to 000 around the 50s mark. This
+release adds the same caps to `embedGraphNodes`:
+
+- **Per-pass cap**: `total > 1500` → embed only the first 1500 nodes
+  this pass; rest catch up incrementally during normal operation
+- **Time-budget abort**: 30 s wall-clock budget per pass
+- Overrides: `AWARENESS_GRAPH_EMBED_MAX_PER_PASS=N`,
+  `AWARENESS_GRAPH_SIM_MAX_NODES=N`
+
+## [0.11.2] - 2026-04-27
+
+### Fixed — graph-embedder similarity caps (partial; see 0.11.3)
+
+When switching into a large workspace (e.g. the Awareness monorepo
+itself, ~11,667 graph nodes), the daemon's similarity-edge generator
+pegged CPU with O(n²) cosine-similarity comparisons inside each
+type-group. UI operations could appear hung even though the switch
+HTTP response returned quickly.
+
+Fixes:
+- **Hard cap**: `count > 2000` → skip similarity entirely with an
+  explanatory log line. Recall via FTS5 + per-card embedding still
+  works; the graph-similarity layer is a bonus, not load-bearing.
+- **Time-budget abort**: within the 2000-node cap, if elapsed exceeds
+  `30s` the loop returns gracefully (`aborted: 'budget'`).
+- Override via env: `AWARENESS_GRAPH_SIM_MAX_NODES=N`.
+
+Daemon health probes (`/healthz`) and concurrent MCP requests are no
+longer starved during graph similarity work on large repos.
+
+## [0.11.1] - 2026-04-26
+
+### Added — F-083 Phase 4 (additive): recall returns wiki_path
+
+Every `awareness_recall` summary item now carries a `wiki_path` (relative
+to `~/.awareness/`) pointing at the canonical markdown file the F-082 wiki
+tree wrote. Agents can WebFetch that .md for full context without calling
+`awareness_recall(detail='full', ...)` again.
+
+Computed deterministically from the same slug rule that `writeCardToWiki`
+uses on `awareness_record`, so no DB schema change is needed; older clients
+that ignore the new field continue to work.
+
+JSON envelope additions:
+- `_wiki_paths`: `[string|null, ...]` aligned with `_ids`
+- `_hint`: updated to mention reading the .md directly
+
+Human-readable text shows `📄 cards/YYYY/MM/<slug>.md` per result.
+
+## [0.11.0] - 2026-04-25
+
+### Added — F-081 Part B: Vibe-Publish via `awareness_publish_agent` MCP tool
+
+You can now turn any in-progress agent session into a Marketplace draft with
+one tool call:
+
+```
+awareness_publish_agent({ slug: "stripe-onboarding-expert", description: "..." })
+  → returns synthesis bundle for the host LLM to fill in
+
+awareness_publish_agent({ slug, manifest: { name, slug, description, skill_md, ... } })
+  → daemon scans for secrets locally, POSTs to /publish-drafts, returns dashboard URL
+```
+
+Free for everyone — no payment required to draft or publish.
+
+- New `core/secret-scanner.mjs`: 13 hard-blocker rules (Anthropic/OpenAI/AWS/
+  GitHub/npm/Slack/PEM/JWT/DB-URL/generic-secret), 5 soft-warning rules
+  (real emails, absolute paths, public IPs, internal hostnames). Redaction
+  with 4-char prefix for triage. False-positive guards.
+- New `daemon/engine/publish-agent.mjs`: assembleContextBundle (recent cards
+  + runtime), reviewDraft (scan + block on hard hits), submitDraftToBackend
+  (integrates with existing F-078 `/publish-drafts` endpoint).
+- `mcp-contract.mjs`: `awareness_publish_agent` registered with two-phase
+  schema (synthesize → submit).
+- `tool-bridge.mjs`: dispatches the tool through the engine.
+
+Requires cloud auth (`npx @awareness-sdk/setup --cloud`) since drafts post
+to the Marketplace backend. Local-only users see a friendly error message
+prompting setup.
+
+## [0.10.1] - 2026-04-25
+
+### Added — F-082 Phase 0-3: Markdown-First Memory wiki tree
+
+Every `awareness_record` now also writes a connected markdown wiki under
+`~/.awareness/`:
+
+- `cards/YYYY/MM/<date>-<category>-<slug>.md` — one file per knowledge card
+- `topics/<slug>.md` — auto-created topic pages aggregating cards
+- `journal/<YYYY-MM-DD>.md` — daily journal live-appended on every record (no cron)
+- `INDEX.md` — wiki home auto-refreshed every record (topic list, recent journal, skills)
+- `README.md` — one-time permanent user orientation
+
+**All event-driven.** Zero scheduled tasks. Failures are swallowed (the SQLite
+write path is unaffected). Existing `knowledge/<category>/<id>.md` continues
+to be written for backward compatibility.
+
+This unlocks:
+- `zip ~/.awareness/` to back up your memory
+- `git init` and push to your own private repo
+- Read your memory as a wiki without our software
+
+See `docs/features/f-082/PRD.md` for the full design.
+
+## [0.10.0] - 2026-04-25
+
+### Changed — scanner default flips to markdown-only (with backward-compat migration)
+
+`scan_code` default in `~/.awareness/scan-config.json` flipped from `true` to
+`false`. Memory recall benefits from markdown-only indexing — code already
+addressable via git/IDE, and indexing it crowded the vector space with low-
+quality matches. Index size shrinks 5–10× for typical repos.
+
+**Backward compatibility — automatic**: on first run after upgrade, if the
+daemon detects an existing `.awareness/index.db` (i.e. you've been using
+v0.9.x or older) and you don't have a `scan-config.json` yet, it writes one
+with `{ "scan_code": true }` to preserve your previous behavior. New installs
+get the cleaner default.
+
+**To adopt the new default explicitly**: delete `.awareness/scan-config.json`
+and re-run the daemon, or set `"scan_code": false`. The existing code chunks
+in `index.db` are preserved either way; only the rule for *future* indexing
+changes.
+
 ## [0.9.12] - 2026-04-21
 
 ### Fixed — wiki "click topic → click card" several-second freeze

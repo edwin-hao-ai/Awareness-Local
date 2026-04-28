@@ -76,14 +76,18 @@ export function buildRecallSummaryContent(summaries, mode = 'local') {
     const meta = [scorePct, age, tokEst].filter(Boolean).join(', ');
     const metaStr = meta ? ` (${meta})` : '';
     const summary = item.summary ? `\n   ${item.summary}` : '';
-    return `${index + 1}. ${type} ${title}${metaStr}${summary}`;
+    const wiki = item.wiki_path ? `\n   📄 ${item.wiki_path}` : '';
+    return `${index + 1}. ${type} ${title}${metaStr}${summary}${wiki}`;
   });
 
   const readableText = `Found ${summaries.length} memories:\n\n${lines.join('\n\n')}`;
   const idsMeta = {
     _ids: summaries.map((item) => item.id),
+    // F-083 Phase 4: agents can fetch the .md file directly for full context.
+    // Path is relative to ~/.awareness/. Backward compatible — older clients ignore it.
+    _wiki_paths: summaries.map((item) => item.wiki_path || null),
     _meta: { detail: 'summary', total: summaries.length, mode },
-    _hint: 'To see full content, call awareness_recall(detail="full", ids=[...]) with IDs above.',
+    _hint: 'To see full content, call awareness_recall(detail="full", ids=[...]) with IDs above. Or read the .md file directly via _wiki_paths (paths relative to ~/.awareness/).',
   };
 
   return {
@@ -334,6 +338,42 @@ export function getToolDefinitions() {
           include_neighbors: { type: 'boolean', default: false, description: 'Include similar files via graph traversal' },
         },
         required: ['query'],
+      },
+    },
+    {
+      name: 'awareness_publish_agent',
+      description:
+        'F-081 Vibe-Publish: turn the current session into a marketplace agent or pack draft. ' +
+        'You (the host LLM) synthesize a manifest from the session context the daemon hands back, ' +
+        'the daemon scans it locally for secrets, then POSTs to /publish-drafts. ' +
+        'Returns a dashboard URL the user opens to review and publish. ' +
+        'Free for everyone — no payment required to draft or publish.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          slug: {
+            type: 'string',
+            pattern: '^[a-z0-9][a-z0-9-]{0,79}$',
+            description: 'Lowercase slug, dashes ok. e.g. "stripe-onboarding-expert".',
+          },
+          description: {
+            type: 'string',
+            maxLength: 280,
+            description: 'One- or two-sentence description (≤ 280 chars).',
+          },
+          kind: {
+            type: 'string',
+            enum: ['agent', 'memory_pack'],
+            default: 'agent',
+            description: '"agent" for an executable agent profile, "memory_pack" for a knowledge bundle.',
+          },
+          manifest: {
+            type: 'object',
+            description:
+              'Manifest you synthesized in the same response cycle. Required fields: name, slug, description, skill_md. Optional: tags, license, language. Daemon will scan and reject if it contains secrets.',
+          },
+        },
+        required: ['slug'],
       },
     },
   ];

@@ -236,7 +236,13 @@ export async function triggerScan(daemon, mode = 'incremental') {
     }
 
     if (result.indexed > 0 && daemon._embedder) {
-      daemon._triggerGraphEmbedding();
+      if (daemon._graphEmbeddingKickoffTimer) {
+        clearTimeout(daemon._graphEmbeddingKickoffTimer);
+      }
+      daemon._graphEmbeddingKickoffTimer = setTimeout(() => {
+        daemon._graphEmbeddingKickoffTimer = null;
+        daemon._triggerGraphEmbedding();
+      }, 1500);
     }
 
     return result;
@@ -260,6 +266,11 @@ export async function triggerScan(daemon, mode = 'incremental') {
  * flooding the log with "The database connection is not open" errors.
  */
 export function triggerGraphEmbedding(daemon) {
+  if (daemon._inflightGraphPipeline) {
+    daemon._graphEmbeddingPending = true;
+    return daemon._inflightGraphPipeline;
+  }
+
   daemon.scanState = updateScanState(daemon.scanState, {
     status: 'indexing',
     phase: 'embedding',
@@ -283,6 +294,9 @@ export function triggerGraphEmbedding(daemon) {
     },
   })
     .then(({ embedding, similarity }) => {
+      if (embedding?.remaining > 0 && daemon.projectDir === projectAtStart && daemon.indexer?.db?.open) {
+        daemon._graphEmbeddingPending = true;
+      }
       if (daemon.projectDir !== projectAtStart) return { embedding, similarity };
       daemon.scanState = updateScanState(daemon.scanState, {
         status: 'idle',
@@ -306,6 +320,13 @@ export function triggerGraphEmbedding(daemon) {
     .finally(() => {
       if (daemon._inflightGraphPipeline === pipelinePromise) {
         daemon._inflightGraphPipeline = null;
+      }
+      if (daemon._graphEmbeddingPending && daemon.projectDir === projectAtStart && daemon.indexer?.db?.open) {
+        daemon._graphEmbeddingPending = false;
+        daemon._graphEmbeddingKickoffTimer = setTimeout(() => {
+          daemon._graphEmbeddingKickoffTimer = null;
+          daemon._triggerGraphEmbedding();
+        }, 2000);
       }
     });
 

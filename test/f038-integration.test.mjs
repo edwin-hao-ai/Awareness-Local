@@ -36,7 +36,9 @@ describe('集成测试: 真实项目扫描管道', () => {
     if (!fs.existsSync(srcDir)) return; // CI 环境可能路径不同
 
     const filter = loadGitignoreRules(PROJECT_ROOT);
-    const config = loadScanConfig(PROJECT_ROOT);
+    // v0.10+ default flipped scan_code to false; this integration test explicitly
+    // wants to verify code-classification, so override the default here.
+    const config = { ...loadScanConfig(PROJECT_ROOT), scan_code: true };
     const results = { code: 0, docs: 0, config: 0, convertible: 0, excluded: 0, ignored: 0 };
 
     function walkDir(dir, relativeTo) {

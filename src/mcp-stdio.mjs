@@ -18,6 +18,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import http from 'node:http';
+import { assertSafeWorkspaceRoot } from './core/workspace-root.mjs';
 import {
   describeKnowledgeCardCategories,
   mcpError,
@@ -54,7 +55,7 @@ function log(...args) {
  * Simple HTTP POST that returns parsed JSON.
  * Uses only node:http to avoid external dependencies.
  */
-function httpPost(url, body) {
+function httpPost(url, body, headers = {}) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const data = JSON.stringify(body);
@@ -67,6 +68,7 @@ function httpPost(url, body) {
         headers: {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(data),
+          ...headers,
         },
       },
       (res) => {
@@ -105,6 +107,35 @@ function checkHealth(port) {
   });
 }
 
+function getHealthInfo(port) {
+  return new Promise((resolve) => {
+    const req = http.get(`http://127.0.0.1:${port}/healthz`, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        if (res.statusCode !== 200) {
+          resolve(null);
+          return;
+        }
+        try {
+          resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.setTimeout(2000, () => {
+      req.destroy();
+      resolve(null);
+    });
+  });
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // ---------------------------------------------------------------------------
 // Daemon lifecycle
 // ---------------------------------------------------------------------------
@@ -113,12 +144,41 @@ function checkHealth(port) {
  * Ensure the daemon is running. If not, spawn it and poll /healthz for up
  * to 15 seconds.
  */
-async function ensureDaemon(port) {
-  if (await checkHealth(port)) return;
+export function buildDaemonStartArgs(projectDir) {
+  const safeProjectDir = assertSafeWorkspaceRoot(projectDir || process.cwd(), 'stdio workspace');
+  const binPath = join(__dirname, '..', 'bin', 'awareness-local.mjs');
+  return {
+    binPath,
+    args: [binPath, 'start', '--project', safeProjectDir],
+  };
+}
+
+export async function ensureDaemon(port, projectDir) {
+  const safeProjectDir = assertSafeWorkspaceRoot(projectDir || process.cwd(), 'stdio workspace');
+  const health = await getHealthInfo(port);
+  if (health?.mode === 'local') {
+    const runningProject = health.project_dir || health.projectDir;
+    if (!runningProject || assertSafeWorkspaceRoot(runningProject, 'daemon workspace') === safeProjectDir) {
+      return;
+    }
+
+    log(`Daemon running for different workspace — switching to ${safeProjectDir}`);
+    const switchResponse = await httpPost(`http://127.0.0.1:${port}/api/v1/workspace/switch`, {
+      project_dir: safeProjectDir,
+    });
+    if (switchResponse?.status === 'ok') {
+      return;
+    }
+    if (switchResponse?.error === 'project_switching') {
+      await wait(250);
+      return ensureDaemon(port, safeProjectDir);
+    }
+    throw new Error(`Failed to switch daemon workspace to ${safeProjectDir}`);
+  }
 
   log('Daemon not reachable — starting...');
-  const binPath = join(__dirname, '..', 'bin', 'awareness-local.mjs');
-  const child = spawn(process.execPath, [binPath, 'start'], {
+  const { args } = buildDaemonStartArgs(safeProjectDir);
+  const child = spawn(process.execPath, args, {
     stdio: 'ignore',
     detached: true,
     env: { ...process.env, PORT: String(port) },
@@ -154,10 +214,16 @@ let _daemonChecked = false;
  * @param {object} args      — tool arguments
  * @returns {object} raw MCP result envelope from daemon
  */
-async function proxyCall(port, toolName, args) {
+async function proxyCall(port, toolName, args, projectDir) {
+  const safeProjectDir = assertSafeWorkspaceRoot(projectDir || process.cwd(), 'stdio workspace');
+  const requestHeaders = {
+    'X-Awareness-Project-Dir': safeProjectDir,
+    'X-Awareness-Project-Dir-B64': Buffer.from(safeProjectDir, 'utf8').toString('base64'),
+  };
+
   // Lazy daemon startup — only check once per process
   if (!_daemonChecked) {
-    await ensureDaemon(port);
+    await ensureDaemon(port, safeProjectDir);
     _daemonChecked = true;
   }
 
@@ -169,15 +235,39 @@ async function proxyCall(port, toolName, args) {
   };
 
   let response;
-  try {
-    response = await httpPost(`http://127.0.0.1:${port}/mcp`, rpcBody);
-  } catch (err) {
-    // Daemon may have died — try to restart once
-    log(`Proxy error, retrying after daemon restart: ${err.message}`);
-    _daemonChecked = false;
-    await ensureDaemon(port);
-    _daemonChecked = true;
-    response = await httpPost(`http://127.0.0.1:${port}/mcp`, rpcBody);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      response = await httpPost(`http://127.0.0.1:${port}/mcp`, rpcBody, requestHeaders);
+    } catch (err) {
+      // Daemon may have died — re-align and retry.
+      log(`Proxy error, retrying after daemon restart: ${err.message}`);
+      _daemonChecked = false;
+      await ensureDaemon(port, safeProjectDir);
+      _daemonChecked = true;
+      continue;
+    }
+
+    if (response?.error === 'project_mismatch') {
+      log(`Daemon workspace drift detected — re-aligning to ${safeProjectDir}`);
+      _daemonChecked = false;
+      await ensureDaemon(port, safeProjectDir);
+      _daemonChecked = true;
+      continue;
+    }
+
+    if (response?.error === 'project_switching') {
+      _daemonChecked = false;
+      await wait(Math.min(250 * (attempt + 1), 1000));
+      await ensureDaemon(port, safeProjectDir);
+      _daemonChecked = true;
+      continue;
+    }
+
+    break;
+  }
+
+  if (!response) {
+    throw new Error(`Daemon RPC failed after repeated retries for ${toolName}`);
   }
 
   // JSON-RPC error
@@ -198,7 +288,7 @@ async function proxyCall(port, toolName, args) {
 // Register tools — schemas match mcp-server.mjs exactly
 // ---------------------------------------------------------------------------
 
-function registerTools(server, port) {
+function registerTools(server, port, projectDir) {
   // ======================== awareness_init ==================================
 
   server.tool(
@@ -217,7 +307,7 @@ function registerTools(server, port) {
     },
     async (params) => {
       try {
-        return await proxyCall(port, 'awareness_init', params);
+        return await proxyCall(port, 'awareness_init', params, projectDir);
       } catch (err) {
         return mcpError(`awareness_init failed: ${err.message}`);
       }
@@ -267,7 +357,7 @@ function registerTools(server, port) {
     },
     async (params) => {
       try {
-        return await proxyCall(port, 'awareness_recall', params);
+        return await proxyCall(port, 'awareness_recall', params, projectDir);
       } catch (err) {
         return mcpError(`awareness_recall failed: ${err.message}`);
       }
@@ -314,7 +404,7 @@ function registerTools(server, port) {
     },
     async (params) => {
       try {
-        return await proxyCall(port, 'awareness_record', params);
+        return await proxyCall(port, 'awareness_record', params, projectDir);
       } catch (err) {
         return mcpError(`awareness_record failed: ${err.message}`);
       }
@@ -343,7 +433,7 @@ function registerTools(server, port) {
     },
     async (params) => {
       try {
-        return await proxyCall(port, 'awareness_lookup', params);
+        return await proxyCall(port, 'awareness_lookup', params, projectDir);
       } catch (err) {
         return mcpError(`awareness_lookup failed: ${err.message}`);
       }
@@ -359,7 +449,7 @@ function registerTools(server, port) {
     },
     async (params) => {
       try {
-        return await proxyCall(port, 'awareness_get_agent_prompt', params);
+        return await proxyCall(port, 'awareness_get_agent_prompt', params, projectDir);
       } catch (err) {
         return mcpError(`awareness_get_agent_prompt failed: ${err.message}`);
       }
@@ -380,6 +470,7 @@ function registerTools(server, port) {
  *   but accepted for API symmetry with direct-mode startup)
  */
 export async function startStdioMcp({ port = 37800, projectDir } = {}) {
+  const safeProjectDir = assertSafeWorkspaceRoot(projectDir || process.cwd(), 'stdio workspace');
   log(`Starting stdio MCP proxy (daemon port=${port})`);
 
   const server = new McpServer({
@@ -387,7 +478,7 @@ export async function startStdioMcp({ port = 37800, projectDir } = {}) {
     version: '1.0.0',
   });
 
-  registerTools(server, port);
+  registerTools(server, port, safeProjectDir);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
@@ -402,7 +493,7 @@ export async function startStdioMcp({ port = 37800, projectDir } = {}) {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const port = parseInt(process.env.AWARENESS_PORT || process.env.PORT || '37800', 10);
-  startStdioMcp({ port }).catch((err) => {
+  startStdioMcp({ port, projectDir: process.cwd() }).catch((err) => {
     process.stderr.write(`[awareness-stdio] Fatal: ${err.message}\n`);
     process.exit(1);
   });

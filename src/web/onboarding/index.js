@@ -68,6 +68,20 @@
   async function triggerScan(onProgress) {
     // Uses daemon scan API (scan-api-handlers.mjs): trigger + poll status.
     try {
+      const configResponse = await fetch('/api/v1/scan/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scan_code: false,
+          scan_docs: true,
+          scan_config: false,
+          scan_convertible: true,
+        }),
+      });
+      if (!configResponse.ok) {
+        throw new Error(`Failed to save scan config: HTTP ${configResponse.status}`);
+      }
+
       await fetch('/api/v1/scan/trigger', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

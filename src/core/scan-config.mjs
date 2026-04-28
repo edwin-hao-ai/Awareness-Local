@@ -8,6 +8,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -15,13 +16,20 @@ import path from 'node:path';
 
 const SCAN_CONFIG_FILENAME = 'scan-config.json';
 const AWARENESS_DIR = '.awareness';
+const require = createRequire(import.meta.url);
 
 /** @type {Readonly<ScanConfig>} */
 const DEFAULT_SCAN_CONFIG = Object.freeze({
   enabled: true,
   include: [],
   exclude: [],
-  scan_code: true,
+  // Memory recall is for decisions / intent / learnings — those live in markdown.
+  // Source code is already addressable via git/IDE search and embedding it just
+  // crowds the vector space with low-quality matches. Users can opt in via
+  // ~/.awareness/scan-config.json { "scan_code": true }. Infrastructure code
+  // (Dockerfile / *.sql / *.sh) lives in the "code" category for now — opt in
+  // if you want migration history and infra decisions in recall.
+  scan_code: false,
   scan_docs: true,
   scan_config: false,
   scan_convertible: true,
@@ -46,6 +54,28 @@ export function loadScanConfig(projectDir) {
   const configPath = getScanConfigPath(projectDir);
 
   if (!fs.existsSync(configPath)) {
+    // ── Backward-compat migration (v0.10.0+) ─────────────────────────
+    // Before v0.10.0 the default was scan_code=true. We flipped to false
+    // because memory recall benefits from markdown-only indexing. To avoid
+    // surprising existing users who already have an index.db full of code
+    // chunks, detect that case and write a config that preserves the old
+    // behavior. Net effect: existing daemons keep scanning code; brand-new
+    // installs get the cleaner default.
+    const legacyIndexPath = path.join(projectDir, AWARENESS_DIR, 'index.db');
+    const isExistingInstall = hasLegacyCodeIndex(legacyIndexPath);
+    if (isExistingInstall) {
+      const preserved = { ...DEFAULT_SCAN_CONFIG, scan_code: true };
+      try {
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        fs.writeFileSync(
+          configPath,
+          JSON.stringify({ scan_code: true, _migration_note: 'preserved pre-0.10.0 default' }, null, 2),
+        );
+      } catch {
+        // Non-fatal: if we can't write, just return preserved in-memory.
+      }
+      return preserved;
+    }
     return { ...DEFAULT_SCAN_CONFIG };
   }
 
@@ -56,6 +86,34 @@ export function loadScanConfig(projectDir) {
   } catch {
     // Corrupted JSON — return defaults
     return { ...DEFAULT_SCAN_CONFIG };
+  }
+}
+
+function hasLegacyCodeIndex(indexPath) {
+  if (!fs.existsSync(indexPath)) return false;
+  try {
+    if (fs.statSync(indexPath).size <= 0) return false;
+  } catch {
+    return false;
+  }
+
+  let db;
+  try {
+    const Database = require('better-sqlite3');
+    db = new Database(indexPath, { readonly: true, fileMustExist: true });
+    const row = db.prepare(`
+      SELECT count(*) AS total
+      FROM graph_nodes
+      WHERE node_type = 'file'
+        AND status = 'active'
+        AND json_extract(metadata, '$.category') = 'code'
+    `).get();
+    return Number(row?.total || 0) > 0;
+  } catch {
+    // If we cannot inspect the legacy DB safely, preserve the old behavior.
+    return true;
+  } finally {
+    try { db?.close(); } catch { /* ignore */ }
   }
 }
 
