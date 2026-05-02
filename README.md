@@ -252,3 +252,11 @@ No Python, no Docker, no cloud account needed.
 ## License
 
 Apache 2.0
+
+---
+
+### Tags & Integration
+**IDE Support:** [Cursor](https://cursor.com), [Windsurf](https://codeium.com/windsurf), [Trae](https://www.trae.sh), [Zed](https://zed.dev), VS Code, JetBrains.
+**Compatible with:** OpenClaw, AutoGPT, LangChain, MetaGPT.
+**Key Technology:** OMP (Open Memory Protocol), LatentMAS, Shared Thought Space, One-click Deployment.
+**Focus:** Solving AI "Lobster Memory" (Long-term memory loss), Automating complex workflows, Simplifying Agent setup.
