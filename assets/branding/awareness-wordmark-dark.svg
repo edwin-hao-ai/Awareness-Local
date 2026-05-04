@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 240" role="img" aria-labelledby="title desc">
+  <title id="title">Awareness Local</title>
+  <desc id="desc">Awareness Local wordmark with orbit icon (dark mode)</desc>
+  <defs>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#E0F2FE"/>
+      <stop offset="45%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#0EA5E9"/>
+    </linearGradient>
+    <linearGradient id="dot" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#F0F9FF"/>
+      <stop offset="100%" stop-color="#7DD3FC"/>
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(20 20)">
+    <circle cx="88" cy="100" r="68" fill="none" stroke="url(#ring)" stroke-width="10"/>
+    <circle cx="64" cy="72" r="26" fill="none" stroke="url(#ring)" stroke-width="8"/>
+    <circle cx="64" cy="72" r="7" fill="url(#dot)"/>
+  </g>
+
+  <g fill="#F8FAFC" font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif">
+    <text x="210" y="118" font-size="72" font-weight="700" letter-spacing="0.5">Awareness Local</text>
+    <text x="212" y="162" font-size="24" font-weight="500" fill="#CBD5E1">
+      Persistent Memory for AI Coding Agents
+    </text>
+  </g>
+</svg>

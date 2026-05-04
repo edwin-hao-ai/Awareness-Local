@@ -5,7 +5,10 @@
 </p>
 
 <p align="center">
-  <img src="assets/branding/awareness-wordmark.svg" alt="Awareness Local — Persistent Memory for AI Coding Agents" width="760" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/branding/awareness-wordmark-dark.svg" />
+    <img src="assets/branding/awareness-wordmark.svg" alt="Awareness Local — Persistent Memory for AI Coding Agents" width="760" />
+  </picture>
 </p>
 
 <p align="center">
