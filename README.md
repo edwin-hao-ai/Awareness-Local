@@ -27,7 +27,7 @@
 
 Awareness Local is a local-first MCP memory server for AI coding agents. It gives Cursor, Claude Code, Copilot, Cline, and other MCP IDEs persistent memory, hybrid semantic + keyword retrieval, and reusable knowledge cards for long-running software projects.
 
-Awareness Local is a local-first memory system for AI coding agents. It runs a lightweight daemon on your machine that stores memories as Markdown files, searches with hybrid FTS5 + embedding, and connects to any IDE via the MCP protocol.
+It runs a lightweight daemon on your machine, stores memory as Markdown, indexes recall with SQLite FTS5 + embeddings, and keeps your AI workflow fast, explainable, and offline-ready.
 
 ```bash
 npx @awareness-sdk/setup
@@ -36,6 +36,57 @@ npx @awareness-sdk/setup
 That's it. Your AI agent now remembers everything across sessions.
 
 ---
+
+## Why Awareness Local
+
+AI coding agents lose context between sessions. Awareness Local provides cross-session memory recall so agents can continue work without re-explaining architecture, past decisions, pending tasks, and implementation constraints.
+
+- Persistent memory for AI coding agents
+- Local-first MCP server with offline support
+- Hybrid retrieval (keyword + semantic)
+- Knowledge card extraction for decisions, solutions, and risks
+
+## Quick Start
+
+```bash
+npx @awareness-sdk/setup
+```
+
+Then open your IDE and start coding. Awareness tools become available for recall, record, and session initialization.
+
+## Popular Use Cases
+
+- Long-running codebase migrations across many sessions
+- Team handoffs where AI should remember prior implementation context
+- Personal coding workflows that need durable preferences and conventions
+- Multi-agent setups that share decision history and task memory
+
+## FAQ
+
+### Does Awareness Local work offline?
+
+Yes. Local mode works fully offline with memory stored on your machine.
+
+### Where is data stored?
+
+Memory is stored as Markdown in `.awareness/`, with a local SQLite index for retrieval.
+
+### Do I need a cloud account?
+
+No. Cloud sync is optional and can be enabled later.
+
+### Which IDEs are supported?
+
+Any MCP-compatible IDE, including Cursor, Claude Code, Copilot, Cline, Windsurf, and others.
+
+## Navigation
+
+- [Benchmark: LongMemEval](#benchmark-longmemeval-iclr-2025)
+- [Supported IDEs](#supported-ides-13)
+- [How It Works](#how-it-works)
+- [MCP Tools](#mcp-tools-available-in-your-ide)
+- [Cloud Sync](#cloud-sync-optional)
+- [SDK & Plugin Ecosystem](#sdk--plugin-ecosystem)
 
 ## Benchmark: LongMemEval (ICLR 2025)
 
